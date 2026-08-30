@@ -465,6 +465,11 @@ function processOutput(
         });
     }
 
+    console.log(
+        "Final detections:",
+        detections
+    );
+
     return applyNMS(
         detections,
         0.45
@@ -512,7 +517,8 @@ export async function detect(
         );
 
     console.log(
-        "Detections:",
+        "Final detections:",
+        detections.length,
         detections
     );
 
