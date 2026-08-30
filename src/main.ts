@@ -7,6 +7,15 @@ import type {
     Detection
 } from "./vision";
 
+import {
+    initializeOCR,
+    detectText
+} from "./ocr";
+
+import type {
+    OCRDetection
+} from "./ocr";
+
 import "./style.css";
 
 
@@ -19,6 +28,12 @@ const loadButton =
 const testButton =
     document.getElementById(
         "testImage"
+    ) as HTMLButtonElement;
+
+
+const ocrButton =
+    document.getElementById(
+        "runOCR"
     ) as HTMLButtonElement;
 
 
@@ -92,6 +107,52 @@ testButton.addEventListener(
 
             status.innerText =
                 "Detection failed.";
+
+        }
+
+    }
+);
+
+
+ocrButton.addEventListener(
+    "click",
+    async () => {
+
+        try {
+
+            result.innerHTML = "";
+
+            await initializeOCR(
+                (msg) => {
+                    status.innerText = msg;
+                }
+            );
+
+            const image =
+                "/test.png";
+
+            const ocrDetections =
+                await detectText(
+                    image,
+                    (msg) => {
+                        status.innerText = msg;
+                    }
+                );
+
+            drawOCRBoxes(
+                image,
+                ocrDetections
+            );
+
+            status.innerText =
+                `OCR completed: ${ocrDetections.length} words detected.`;
+
+        } catch (error) {
+
+            console.error(error);
+
+            status.innerText =
+                "OCR failed.";
 
         }
 
@@ -207,6 +268,102 @@ function drawDetections(
                     `${detection.className} ${(detection.confidence * 100).toFixed(1)}%`,
                     x,
                     Math.max(15, y - 5)
+                );
+
+            }
+        );
+
+
+        result.appendChild(
+            canvas
+        );
+
+    };
+}
+
+
+function drawOCRBoxes(
+    imageSrc: string,
+    detections: OCRDetection[]
+): void {
+
+    const image =
+        new Image();
+
+    image.src =
+        imageSrc;
+
+    image.onload = () => {
+
+        const canvas =
+            document.createElement(
+                "canvas"
+            );
+
+        canvas.width =
+            image.width;
+
+        canvas.height =
+            image.height;
+
+        const ctx =
+            canvas.getContext(
+                "2d"
+            );
+
+        if (!ctx) {
+            return;
+        }
+
+        /*
+         * Draw original image
+         */
+
+        ctx.drawImage(
+            image,
+            0,
+            0
+        );
+
+
+        /*
+         * Draw OCR bounding boxes
+         */
+
+        detections.forEach(
+            (detection) => {
+
+                ctx.strokeStyle =
+                    "blue";
+
+                ctx.lineWidth =
+                    2;
+
+                ctx.strokeRect(
+                    detection.x,
+                    detection.y,
+                    detection.width,
+                    detection.height
+                );
+
+
+                /*
+                 * Label
+                 */
+
+                ctx.fillStyle =
+                    "blue";
+
+                ctx.font =
+                    "14px Arial";
+
+                ctx.fillText(
+                    `${detection.text} ${detection.confidence.toFixed(0)}%`,
+                    detection.x,
+                    Math.max(
+                        15,
+                        detection.y - 5
+                    )
                 );
 
             }
