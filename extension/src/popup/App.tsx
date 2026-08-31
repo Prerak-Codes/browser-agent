@@ -104,33 +104,41 @@ export default function App() {
       addAudit("Screen captured");
       setStatus("Running YOLO detection...");
 
+      let yoloResults: Detection[] = [];
       try {
-        const detections = await detect(response.image);
-        setVisionDetections(detections);
-        addAudit(`YOLO detected ${detections.length} objects`);
+        console.log("[PG] Starting YOLO detection...");
+        yoloResults = await detect(response.image);
+        console.log("[PG] YOLO results:", yoloResults.length, yoloResults);
+        setVisionDetections(yoloResults);
+        addAudit(`YOLO detected ${yoloResults.length} objects`);
       } catch (err) {
-        console.error("YOLO failed:", err);
+        console.error("[PG] YOLO failed:", err);
+        setStatus(`YOLO failed: ${err instanceof Error ? err.message : String(err)}`);
         addAudit("YOLO detection failed, continuing with OCR");
       }
 
       setStatus("Running OCR...");
 
+      let ocrResults: OCRDetection[] = [];
       try {
         await initializeOCR((msg) => setStatus(msg));
-        const ocr = await detectText(response.image, (msg) => setStatus(msg));
-        setOcrDetections(ocr);
-        addAudit(`OCR detected ${ocr.length} text regions`);
+        ocrResults = await detectText(response.image, (msg) => setStatus(msg));
+        console.log("[PG] OCR results:", ocrResults.length, ocrResults);
+        setOcrDetections(ocrResults);
+        addAudit(`OCR detected ${ocrResults.length} text regions`);
       } catch (err) {
-        console.error("OCR failed:", err);
+        console.error("[PG] OCR failed:", err);
         addAudit("OCR failed, continuing...");
       }
 
       setStatus("Analyzing privacy...");
 
+      console.log("[PG] Running detectSensitiveRegions with", ocrResults.length, "OCR and", yoloResults.length, "vision results");
       const regions = detectSensitiveRegions(
-        ocrDetections.length > 0 ? ocrDetections : [],
-        visionDetections.length > 0 ? visionDetections : []
+        ocrResults,
+        yoloResults
       );
+      console.log("[PG] Sensitive regions:", regions.length, regions);
       setSensitiveRegions(regions);
       updateStats(regions);
       addAudit(`${regions.length} sensitive regions detected`);

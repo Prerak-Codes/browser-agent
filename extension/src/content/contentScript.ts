@@ -1,77 +1,91 @@
+interface PageDetection {
+  text: string;
+  confidence: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+function extractPageText(): PageDetection[] {
+  const results: PageDetection[] = [];
+  const selectors = "input, textarea, select, label, h1, h2, h3, h4, h5, h6, p, span, a, button, td, th, li";
+  const elements = document.querySelectorAll(selectors);
+
+  for (const el of elements) {
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) continue;
+
+    let text = "";
+    const input = el as HTMLInputElement;
+
+    if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
+      text = input.placeholder || input.getAttribute("aria-label") || input.name || input.type || "";
+    } else if (el.tagName === "SELECT") {
+      text = el.getAttribute("aria-label") || el.id || "select";
+    } else {
+      text = (el.textContent || "").trim();
+    }
+
+    if (text.length === 0 || text.length > 200) continue;
+
+    const skipTags = ["SCRIPT", "STYLE", "NOSCRIPT", "IFRAME"];
+    if (skipTags.includes(el.tagName)) continue;
+
+    const style = getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden") continue;
+
+    results.push({
+      text: text.substring(0, 200),
+      confidence: 0.9,
+      x: rect.left + window.scrollX,
+      y: rect.top + window.scrollY,
+      width: rect.width,
+      height: rect.height,
+    });
+  }
+
+  return results;
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message.action === "detectFormElements") {
-    const formElements: string[] = [];
+  console.log("[Content] Received message:", message.action);
 
-    const inputs = document.querySelectorAll("input, textarea, select");
-    inputs.forEach((el) => {
-      const input = el as HTMLInputElement;
-      const type = input.type || "";
-      const name = (input.name || "").toLowerCase();
-      const placeholder = (input.placeholder || "").toLowerCase();
-      const label = input.getAttribute("aria-label") || "";
-      const combined = `${type} ${name} ${placeholder} ${label}`.toLowerCase();
+  if (message.action === "ping") {
+    sendResponse({ success: true });
+    return true;
+  }
 
-      if (type === "password" || combined.includes("password")) {
-        formElements.push("password_field");
-      } else if (
-        type === "email" ||
-        combined.includes("email") ||
-        combined.includes("e-mail")
-      ) {
-        formElements.push("email_field");
-      } else if (
-        type === "tel" ||
-        combined.includes("phone") ||
-        combined.includes("mobile")
-      ) {
-        formElements.push("phone_field");
-      } else if (
-        combined.includes("card") ||
-        combined.includes("credit") ||
-        combined.includes("payment")
-      ) {
-        formElements.push("credit_card_field");
-      } else if (
-        combined.includes("name") ||
-        combined.includes("username")
-      ) {
-        formElements.push("name_field");
-      } else if (
-        combined.includes("address") ||
-        combined.includes("street")
-      ) {
-        formElements.push("address_field");
-      }
-    });
+  if (message.action === "extractText") {
+    const results = extractPageText();
+    console.log("[Content] Text extraction:", results.length, "regions");
+    sendResponse({ success: true, results });
+    return true;
+  }
 
-    const buttons = document.querySelectorAll("button, input[type='submit']");
-    buttons.forEach((el) => {
-      const text = (el.textContent || "").toLowerCase();
-      const value = (
-        (el as HTMLInputElement).value || ""
-      ).toLowerCase();
-      const combined = `${text} ${value}`;
-
-      if (
-        combined.includes("login") ||
-        combined.includes("sign in")
-      ) {
-        formElements.push("login_button");
-      } else if (
-        combined.includes("submit") ||
-        combined.includes("save") ||
-        combined.includes("send")
-      ) {
-        formElements.push("submit_button");
-      }
-    });
-
-    sendResponse({
-      success: true,
-      elements: [...new Set(formElements)],
-    });
+  if (message.action === "contentDetect") {
+    console.log("[Content] Injecting YOLO script into page...");
+    injectYoloScript(message.image);
+    const handler = (e: CustomEvent) => {
+      console.log("[Content] Received YOLO result:", e.detail?.length, "detections");
+      window.removeEventListener("pg-yolo-result", handler as EventListener);
+      sendResponse({ success: true, detections: e.detail });
+    };
+    window.addEventListener("pg-yolo-result", handler as EventListener);
     return true;
   }
 
   return false;
 });
+
+function injectYoloScript(imageSrc: string) {
+  const modelUrl = chrome.runtime.getURL("model/yolov8n.onnx");
+  const wasmDir = chrome.runtime.getURL("ort/");
+  const script = document.createElement("script");
+  script.src = chrome.runtime.getURL("assets/yolo-page.js");
+  script.dataset.pgImage = imageSrc;
+  script.dataset.pgModel = modelUrl;
+  script.dataset.pgWasmDir = wasmDir;
+  script.onload = () => script.remove();
+  (document.head || document.documentElement).appendChild(script);
+}

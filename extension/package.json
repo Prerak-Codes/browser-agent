@@ -5,20 +5,20 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && node build-yolo.js",
     "preview": "vite preview"
   },
   "dependencies": {
     "onnxruntime-web": "^1.29.0",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "tesseract.js": "^7.0.0"
+    "react-dom": "^19.1.0"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.300",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^4.4.1",
+    "esbuild": "^0.28.2",
     "typescript": "~6.0.2",
     "vite": "^8.2.2"
   }

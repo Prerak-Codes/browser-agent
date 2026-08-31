@@ -1,4 +1,42 @@
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+const OFFSCREEN_URL = "offscreen.html";
+
+async function ensureOffscreenDocument(): Promise<void> {
+  const existingContexts = await chrome.runtime.getContexts({
+    contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
+  });
+  if (existingContexts.length > 0) return;
+
+  await chrome.offscreen.createDocument({
+    url: OFFSCREEN_URL,
+    reasons: [chrome.offscreen.Reason.WORKERS],
+    justification: "Run YOLO object detection locally using WebGL/WebGPU",
+  });
+}
+
+async function ensureContentScript(tabId: number): Promise<void> {
+  try {
+    await chrome.tabs.sendMessage(tabId, { action: "ping" });
+  } catch {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["contentScript.js"],
+    });
+  }
+}
+
+function detectWithOffscreen(image: string): Promise<{ success: boolean; detections?: unknown[]; error?: string }> {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ action: "offscreenDetect", image }, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve(response);
+    });
+  });
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "capture") {
     chrome.tabs.captureVisibleTab(
       undefined as unknown as number,
@@ -41,6 +79,39 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         title: tab.title,
       });
     });
+    return true;
+  }
+
+  if (message.action === "detectYolo") {
+    (async () => {
+      try {
+        await ensureOffscreenDocument();
+        const response = await detectWithOffscreen(message.image);
+        sendResponse(response);
+      } catch (err) {
+        sendResponse({
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (message.action === "ensureContentScript") {
+    const tabId = sender.tab?.id ?? message.tabId;
+    if (!tabId) {
+      sendResponse({ success: false, error: "No tab ID" });
+      return true;
+    }
+    ensureContentScript(tabId)
+      .then(() => sendResponse({ success: true }))
+      .catch((err) =>
+        sendResponse({
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      );
     return true;
   }
 

@@ -44,14 +44,39 @@ function copyModel() {
   };
 }
 
+const ORT_WASM_FILES = [
+  "ort-wasm-simd-threaded.wasm",
+  "ort-wasm-simd-threaded.mjs",
+  "ort-wasm-simd-threaded.jsep.wasm",
+  "ort-wasm-simd-threaded.jsep.mjs",
+];
+
+function copyOrtWasm() {
+  return {
+    name: "copy-ort-wasm",
+    closeBundle() {
+      const ortDist = resolve(__dirname, "node_modules/onnxruntime-web/dist");
+      const dest = resolve(__dirname, "dist/ort");
+      mkdirSync(dest, { recursive: true });
+      for (const file of ORT_WASM_FILES) {
+        copyFileSync(resolve(ortDist, file), resolve(dest, file));
+      }
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), copyManifest(), copyModel()],
+  plugins: [react(), copyManifest(), copyModel(), copyOrtWasm()],
+  resolve: {
+    conditions: ["onnxruntime-web-use-extern-wasm", "import", "module", "browser", "default"],
+  },
   build: {
     outDir: "dist",
     emptyOutDir: true,
     rollupOptions: {
       input: {
         popup: resolve(__dirname, "popup.html"),
+        offscreen: resolve(__dirname, "offscreen.html"),
         background: resolve(__dirname, "src/background/serviceWorker.ts"),
         contentScript: resolve(__dirname, "src/content/contentScript.ts"),
       },

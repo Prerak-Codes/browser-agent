@@ -9,7 +9,7 @@ export interface Detection {
 }
 
 export const MODEL_SIZE = 640;
-export const CONFIDENCE_THRESHOLD = 0.4;
+export const CONFIDENCE_THRESHOLD = 0.25;
 
 export const CLASS_NAMES: string[] = [
   "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
