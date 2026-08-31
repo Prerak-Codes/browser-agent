@@ -14,3 +14,8 @@ class AgentResponse(BaseModel):
     fields: Dict[str, str]
     requires_confirmation: bool
     explanation: str
+
+
+class AgentErrorResponse(BaseModel):
+    success: bool = False
+    error: str

@@ -1,5 +1,6 @@
+from fastapi import HTTPException
 from schemas.agent import AgentRequest, AgentResponse
-from agent.llm import ask_llm
+from agent.llm import ask_llm, LLMError
 from agent.planner import create_action_plan
 
 
@@ -15,11 +16,18 @@ def analyze_task(request: AgentRequest) -> AgentResponse:
 
     print("Calling LLM...")
 
-    llm_result = ask_llm(
-        task=request.task,
-        screen_context=screen_context,
-        detected_elements=request.detected_elements
-    )
+    try:
+        llm_result = ask_llm(
+            task=request.task,
+            screen_context=screen_context,
+            detected_elements=request.detected_elements
+        )
+    except LLMError as e:
+        print(f"[Agent] LLM error: {e.message}")
+        raise HTTPException(
+            status_code=e.status_code or 500,
+            detail=e.message
+        )
 
     print("Creating action plan...")
 

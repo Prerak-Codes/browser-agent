@@ -3,6 +3,13 @@ import json
 import httpx
 
 
+class LLMError(Exception):
+    def __init__(self, message: str, status_code: int | None = None):
+        self.message = message
+        self.status_code = status_code
+        super().__init__(message)
+
+
 def ask_llm(
     task: str,
     screen_context: str,
@@ -59,6 +66,15 @@ def ask_llm(
             timeout=30.0
         )
 
+        if response.status_code == 401:
+            raise LLMError("Invalid API key", 401)
+        if response.status_code == 404:
+            raise LLMError("Model not found", 404)
+        if response.status_code == 429:
+            raise LLMError("Rate limit exceeded", 429)
+        if response.status_code >= 500:
+            raise LLMError("Provider error", response.status_code)
+
         response.raise_for_status()
 
         data = response.json()
@@ -69,12 +85,22 @@ def ask_llm(
             .get("content", "")
         )
 
+        if not content:
+            raise LLMError("Empty LLM response")
+
         return json.loads(content)
 
+    except json.JSONDecodeError:
+        print("[LLM] Invalid JSON response from LLM")
+        raise LLMError("Invalid JSON response from LLM")
+    except httpx.TimeoutException:
+        print("[LLM] Request timed out")
+        raise LLMError("LLM request timed out")
+    except LLMError:
+        raise
     except Exception as e:
         print(f"[LLM] Error: {e}")
-        print("[LLM] Falling back to mock response")
-        return _mock_response(task, detected_elements)
+        raise LLMError(f"LLM request failed: {str(e)}")
 
 
 def _build_prompt(
