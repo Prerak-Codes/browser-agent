@@ -28,6 +28,31 @@ import {
     redactImage
 } from "./redaction";
 
+import {
+    getPrivacyPolicy,
+    savePrivacyPolicy
+} from "./policy";
+
+import type {
+    PrivacyPolicy
+} from "./policy";
+
+import {
+    buildSanitizedContext
+} from "./context";
+
+import type {
+    SanitizedContext
+} from "./context";
+
+import {
+    analyzeWithAgent
+} from "./api";
+
+import type {
+    AgentResponse
+} from "./api";
+
 import "./style.css";
 
 
@@ -79,14 +104,219 @@ const privacyReport =
     ) as HTMLDivElement;
 
 
+const policyFace =
+    document.getElementById(
+        "policyFace"
+    ) as HTMLSelectElement;
+
+
+const policyEmail =
+    document.getElementById(
+        "policyEmail"
+    ) as HTMLSelectElement;
+
+
+const policyPhone =
+    document.getElementById(
+        "policyPhone"
+    ) as HTMLSelectElement;
+
+
+const policyCreditCard =
+    document.getElementById(
+        "policyCreditCard"
+    ) as HTMLSelectElement;
+
+
+const policyPassword =
+    document.getElementById(
+        "policyPassword"
+    ) as HTMLSelectElement;
+
+
+const policyAadhaar =
+    document.getElementById(
+        "policyAadhaar"
+    ) as HTMLSelectElement;
+
+
+const aiAccessToggle =
+    document.getElementById(
+        "aiAccessToggle"
+    ) as HTMLButtonElement;
+
+
+const savePolicyButton =
+    document.getElementById(
+        "savePolicy"
+    ) as HTMLButtonElement;
+
+
+const policyStatus =
+    document.getElementById(
+        "policyStatus"
+    ) as HTMLDivElement;
+
+
+const analyzeWithAIButton =
+    document.getElementById(
+        "analyzeWithAI"
+    ) as HTMLButtonElement;
+
+
+const agentTaskInput =
+    document.getElementById(
+        "agentTask"
+    ) as HTMLInputElement;
+
+
+const agentResult =
+    document.getElementById(
+        "agentResult"
+    ) as HTMLDivElement;
+
+
+const contextStatus =
+    document.getElementById(
+        "contextStatus"
+    ) as HTMLDivElement;
+
+
 let lastAnalysis: {
     visionDetections: Detection[];
     ocrDetections: OCRDetection[];
     sensitiveRegions: SensitiveRegion[];
 } | null = null;
 
+let lastSanitizedContext: SanitizedContext | null = null;
+
+let aiAccessEnabled = true;
 
 const TEST_IMAGE = "/test.png";
+
+
+function loadPolicyToUI(
+    policy: PrivacyPolicy
+): void {
+
+    policyFace.value = policy.face;
+
+    policyEmail.value = policy.email;
+
+    policyPhone.value = policy.phone;
+
+    policyCreditCard.value =
+        policy.credit_card;
+
+    policyPassword.value =
+        policy.password;
+
+    policyAadhaar.value =
+        policy.aadhaar;
+}
+
+
+function readPolicyFromUI(): PrivacyPolicy {
+    return {
+        face: policyFace.value as PrivacyPolicy["face"],
+        email: policyEmail.value as PrivacyPolicy["email"],
+        phone: policyPhone.value as PrivacyPolicy["phone"],
+        credit_card: policyCreditCard.value as PrivacyPolicy["credit_card"],
+        password: policyPassword.value as PrivacyPolicy["password"],
+        aadhaar: policyAadhaar.value as PrivacyPolicy["aadhaar"]
+    };
+}
+
+
+function loadAIAccessFromStorage(): void {
+
+    try {
+        const stored =
+            localStorage.getItem(
+                "privacy-agent-ai-access"
+            );
+
+        if (stored !== null) {
+            aiAccessEnabled =
+                stored !== "false";
+        }
+    } catch {
+        /* ignore */
+    }
+
+    updateAIToggleUI();
+}
+
+
+function saveAIAccessToStorage(): void {
+
+    try {
+        localStorage.setItem(
+            "privacy-agent-ai-access",
+            String(aiAccessEnabled)
+        );
+    } catch {
+        /* ignore */
+    }
+}
+
+
+function updateAIToggleUI(): void {
+
+    if (aiAccessEnabled) {
+        aiAccessToggle.textContent = "ON";
+        aiAccessToggle.classList.remove(
+            "off"
+        );
+    } else {
+        aiAccessToggle.textContent = "OFF";
+        aiAccessToggle.classList.add(
+            "off"
+        );
+    }
+}
+
+
+const initialPolicy =
+    getPrivacyPolicy();
+
+loadPolicyToUI(initialPolicy);
+
+loadAIAccessFromStorage();
+
+
+aiAccessToggle.addEventListener(
+    "click",
+    () => {
+
+        aiAccessEnabled =
+            !aiAccessEnabled;
+
+        saveAIAccessToStorage();
+
+        updateAIToggleUI();
+    }
+);
+
+
+savePolicyButton.addEventListener(
+    "click",
+    () => {
+
+        const policy =
+            readPolicyFromUI();
+
+        savePrivacyPolicy(policy);
+
+        policyStatus.innerText =
+            "✓ Privacy policy saved";
+
+        setTimeout(() => {
+            policyStatus.innerText = "";
+        }, 2000);
+
+    }
+);
 
 
 loadButton.addEventListener(
@@ -326,14 +556,28 @@ sanitizeButton.addEventListener(
             status.innerText =
                 "Sanitizing screenshot...";
 
+            const policy =
+                getPrivacyPolicy();
+
             const sensitiveRegions =
                 lastAnalysis.sensitiveRegions;
 
             const sanitizedDataURL =
                 await redactImage(
                     TEST_IMAGE,
-                    sensitiveRegions
+                    sensitiveRegions,
+                    policy
                 );
+
+            const context =
+                buildSanitizedContext(
+                    agentTaskInput.value ||
+                    "Analyze screen",
+                    sensitiveRegions,
+                    sanitizedDataURL
+                );
+
+            lastSanitizedContext = context;
 
             result.innerHTML = "";
 
@@ -342,9 +586,14 @@ sanitizeButton.addEventListener(
                 sanitizedDataURL
             );
 
+            contextStatus.textContent =
+                "✓ Sanitized context ready";
+
+            contextStatus.style.color =
+                "#1a7f37";
+
             status.innerText =
-                "✓ Privacy protection complete. " +
-                "Raw screenshot retained locally.";
+                "✓ Privacy protection complete. Raw screenshot retained locally.";
 
         } catch (error) {
 
@@ -352,6 +601,87 @@ sanitizeButton.addEventListener(
 
             status.innerText =
                 "Sanitization failed.";
+
+        }
+
+    }
+);
+
+
+analyzeWithAIButton.addEventListener(
+    "click",
+    async () => {
+
+        try {
+
+            agentResult.innerHTML = "";
+
+            if (!aiAccessEnabled) {
+
+                agentResult.innerHTML =
+                    '<div class="action-title">' +
+                    "AI access is disabled." +
+                    "</div>" +
+                    '<div class="action-explanation">' +
+                    "No data was sent to the backend. Only local privacy processing is active." +
+                    "</div>";
+
+                agentResult.classList.add(
+                    "visible"
+                );
+
+                status.innerText =
+                    "AI access disabled.";
+
+                return;
+
+            }
+
+            if (
+                !lastSanitizedContext
+            ) {
+
+                status.innerText =
+                    "Run Analyze Privacy and Sanitize Screen first.";
+
+                return;
+
+            }
+
+            status.innerText =
+                "Sending sanitized context to agent...";
+
+            const response =
+                await analyzeWithAgent(
+                    lastSanitizedContext
+                );
+
+            showAgentResponse(
+                response
+            );
+
+            status.innerText =
+                "Agent response received.";
+
+        } catch (error) {
+
+            console.error(error);
+
+            status.innerText =
+                "Agent request failed.";
+
+            agentResult.innerHTML =
+                '<div class="action-title">' +
+                "Failed to connect to backend." +
+                "</div>" +
+                '<div class="action-explanation">' +
+                "Make sure the backend is running on " +
+                "http://localhost:8000" +
+                "</div>";
+
+            agentResult.classList.add(
+                "visible"
+            );
 
         }
 
@@ -947,6 +1277,123 @@ function showBeforeAfter(
 
     result.appendChild(
         container
+    );
+
+}
+
+
+function showAgentResponse(
+    response: AgentResponse
+): void {
+
+    agentResult.innerHTML = "";
+
+    let html = "";
+
+    html +=
+        '<div class="action-title">';
+    html += "AI Agent Suggestion";
+    html += "</div>";
+
+    html +=
+        '<div class="action-field">';
+    html += `<strong>Action:</strong> ${response.action}`;
+    html += "</div>";
+
+    const fieldKeys =
+        Object.keys(response.fields);
+
+    if (fieldKeys.length > 0) {
+
+        html +=
+            '<div class="action-field">';
+        html += "<strong>Fields:</strong>";
+
+        for (
+            const key of fieldKeys
+        ) {
+
+            html += `<br/>${key} → ${response.fields[key]}`;
+
+        }
+
+        html += "</div>";
+
+    }
+
+    html +=
+        '<div class="action-explanation">';
+    html += response.explanation;
+    html += "</div>";
+
+    if (
+        response.requires_confirmation
+    ) {
+
+        html +=
+            '<div class="action-warning">';
+        html +=
+            "⚠ Requires confirmation";
+        html += "</div>";
+
+    }
+
+    html +=
+        '<div class="action-buttons">';
+
+    html +=
+        '<button class="btn-approve" id="btnApprove">';
+    html += "Approve";
+    html += "</button>";
+
+    html +=
+        '<button class="btn-reject" id="btnReject">';
+    html += "Reject";
+    html += "</button>";
+
+    html += "</div>";
+
+    agentResult.innerHTML = html;
+
+    agentResult.classList.add(
+        "visible"
+    );
+
+    const approveBtn =
+        document.getElementById(
+            "btnApprove"
+        );
+
+    const rejectBtn =
+        document.getElementById(
+            "btnReject"
+        );
+
+    approveBtn?.addEventListener(
+        "click",
+        () => {
+
+            agentResult.innerHTML =
+                '<div class="action-title">' +
+                "✓ Action approved" +
+                "</div>" +
+                '<div class="action-explanation">' +
+                "No automatic browser actions implemented yet. This is a prototype." +
+                "</div>";
+
+        }
+    );
+
+    rejectBtn?.addEventListener(
+        "click",
+        () => {
+
+            agentResult.innerHTML =
+                '<div class="action-title">' +
+                "✗ Action rejected" +
+                "</div>";
+
+        }
     );
 
 }

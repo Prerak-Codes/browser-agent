@@ -2,13 +2,17 @@ import type {
     SensitiveRegion
 } from "./privacy";
 
+import type {
+    PrivacyAction
+} from "./policy";
+
 import {
-    DEFAULT_POLICY
-} from "./privacy";
+    DEFAULT_PRIVACY_POLICY
+} from "./policy";
 
 import type {
     PrivacyPolicy
-} from "./privacy";
+} from "./policy";
 
 
 function applyMask(
@@ -60,108 +64,10 @@ function applyBlur(
 }
 
 
-function applyPixelate(
-    ctx: CanvasRenderingContext2D,
-    x: number,
-    y: number,
-    width: number,
-    height: number
-): void {
-
-    const pixelSize = 10;
-
-    const safeW =
-        Math.max(
-            1,
-            Math.floor(width)
-        );
-
-    const safeH =
-        Math.max(
-            1,
-            Math.floor(height)
-        );
-
-    const imageData =
-        ctx.getImageData(
-            x,
-            y,
-            safeW,
-            safeH
-        );
-
-    const data =
-        imageData.data;
-
-    for (
-        let py = 0;
-        py < safeH;
-        py += pixelSize
-    ) {
-
-        for (
-            let px = 0;
-            px < safeW;
-            px += pixelSize
-        ) {
-
-            const i =
-                (py * safeW + px) * 4;
-
-            const r = data[i];
-            const g = data[i + 1];
-            const b = data[i + 2];
-
-            for (
-                let dy = 0;
-                dy <
-                pixelSize &&
-                py + dy < safeH;
-                dy++
-            ) {
-
-                for (
-                    let dx = 0;
-                    dx <
-                    pixelSize &&
-                    px + dx < safeW;
-                    dx++
-                ) {
-
-                    const j =
-                        ((py + dy) *
-                            safeW +
-                            (px + dx)) *
-                        4;
-
-                    data[j] = r;
-                    data[j + 1] = g;
-                    data[j + 2] = b;
-
-                }
-
-            }
-
-        }
-
-    }
-
-    ctx.putImageData(
-        imageData,
-        x,
-        y
-    );
-}
-
-
 function applyRedaction(
     ctx: CanvasRenderingContext2D,
     region: SensitiveRegion,
-    action:
-        | "blur"
-        | "mask"
-        | "pixelate"
-        | "redact"
+    action: PrivacyAction
 ): void {
 
     const x =
@@ -209,14 +115,7 @@ function applyRedaction(
             );
             break;
 
-        case "pixelate":
-            applyPixelate(
-                ctx,
-                x,
-                y,
-                w,
-                h
-            );
+        case "allow":
             break;
 
     }
@@ -227,7 +126,7 @@ export async function redactImage(
     imageSrc: string,
     sensitiveRegions: SensitiveRegion[],
     policy: PrivacyPolicy =
-        DEFAULT_POLICY
+        DEFAULT_PRIVACY_POLICY
 ): Promise<string> {
 
     return new Promise(
