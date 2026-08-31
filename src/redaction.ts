@@ -269,19 +269,45 @@ export async function redactImage(
                     0
                 );
 
+                const scaleX =
+                    image.width / 640;
+
+                const scaleY =
+                    image.height / 640;
+
                 for (
                     const region of
                     sensitiveRegions
                 ) {
 
+                    const scaled =
+                        region.source ===
+                        "vision"
+                            ? {
+                                ...region,
+                                x:
+                                    region.x *
+                                    scaleX,
+                                y:
+                                    region.y *
+                                    scaleY,
+                                width:
+                                    region.width *
+                                    scaleX,
+                                height:
+                                    region.height *
+                                    scaleY
+                            }
+                            : region;
+
                     const action =
                         policy[
-                        region.type
+                        scaled.type
                         ];
 
                     applyRedaction(
                         ctx,
-                        region,
+                        scaled,
                         action
                     );
 
