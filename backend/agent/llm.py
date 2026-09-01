@@ -112,13 +112,21 @@ def _build_prompt(
     elements_str = ", ".join(detected_elements) if detected_elements else "none detected"
 
     return (
-        f"Task: {task}\n"
-        f"Screen context: {screen_context}\n"
-        f"Detected UI elements: {elements_str}\n\n"
+        f"You are a privacy-preserving AI agent that helps users interact with web pages.\n\n"
+        f"USER TASK: {task}\n\n"
+        f"WHAT IS VISIBLE ON SCREEN (from OCR/DOM text extraction):\n{screen_context}\n\n"
+        f"DETECTED SENSITIVE ELEMENTS: {elements_str}\n\n"
+        f"INSTRUCTIONS:\n"
+        f"- Analyze the visible text on the screen carefully.\n"
+        f"- Identify buttons, links, forms, input fields, and other interactive elements.\n"
+        f"- Suggest the most appropriate action to accomplish the user's task.\n"
+        f"- If there is a button that matches the task (e.g. 'Apply', 'Quick Apply', 'Submit'), suggest clicking it.\n"
+        f"- If there are form fields, suggest filling them with SAFE_PLACEHOLDER values.\n"
+        f"- Be specific about which element to interact with based on the actual text visible on screen.\n\n"
         f"Return JSON: {{\"action\": \"fill_form|click|navigate|none\", "
         f"\"fields\": {{\"field_name\": \"SAFE_PLACEHOLDER\"}}, "
         f"\"requires_confirmation\": true, "
-        f"\"explanation\": \"brief explanation\"}}"
+        f"\"explanation\": \"specific explanation of what was found on screen and what action to take\"}}"
     )
 
 

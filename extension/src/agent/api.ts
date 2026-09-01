@@ -43,12 +43,17 @@ export function createSafeAgentPayload(context: SanitizedContext): {
   detected_elements: string[];
   screen_context: string;
 } {
+  const ocrText = context.ocrTexts.length > 0
+    ? context.ocrTexts.join("; ")
+    : "No text detected on screen.";
+
   return {
     task: context.task,
     sanitized_image: context.sanitizedImage,
     detected_elements: context.detectedElements,
     screen_context:
-      `Sensitive regions: ${context.privacySummary.totalSensitiveRegions}. ` +
-      `Types: ${context.privacySummary.types.join(", ")}.`,
+      `Page text visible on screen: ${ocrText}\n` +
+      `Sensitive regions found: ${context.privacySummary.totalSensitiveRegions}. ` +
+      `Types: ${context.privacySummary.types.join(", ") || "none"}.`,
   };
 }

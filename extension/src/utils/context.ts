@@ -5,6 +5,7 @@ export interface SanitizedContext {
   task: string;
   sanitizedImage?: string;
   detectedElements: string[];
+  ocrTexts: string[];
   privacySummary: {
     totalSensitiveRegions: number;
     types: string[];
@@ -49,7 +50,8 @@ function collectOCRTexts(sensitiveRegions: SensitiveRegion[]): string[] {
 export function buildSanitizedContext(
   task: string,
   sensitiveRegions: SensitiveRegion[],
-  sanitizedImage?: string
+  sanitizedImage?: string,
+  allOcrTexts?: string[]
 ): SanitizedContext {
   const types: string[] = [];
   const typeSet = new Set<PrivacyType>();
@@ -61,7 +63,7 @@ export function buildSanitizedContext(
     }
   }
 
-  const ocrTexts = collectOCRTexts(sensitiveRegions);
+  const ocrTexts = allOcrTexts || collectOCRTexts(sensitiveRegions);
   const detectedElements = inferElements(ocrTexts);
 
   if (sensitiveRegions.length > 0 && detectedElements.length === 0) {
@@ -79,6 +81,7 @@ export function buildSanitizedContext(
     task,
     sanitizedImage,
     detectedElements,
+    ocrTexts,
     privacySummary: {
       totalSensitiveRegions: sensitiveRegions.length,
       types,

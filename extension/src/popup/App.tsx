@@ -224,7 +224,11 @@ export default function App() {
         else if (action === "redact") addAudit(`${region.type} redacted`);
       });
 
-      const ctx = buildSanitizedContext(agentTask, sensitiveRegions, sanitized);
+      const allOcrTexts = ocrDetections
+        .map((r) => r.text)
+        .filter((t) => t && t.length > 0);
+
+      const ctx = buildSanitizedContext(agentTask, sensitiveRegions, sanitized, allOcrTexts);
       setSanitizedContext(ctx);
       addAudit("Sanitized context created");
 
