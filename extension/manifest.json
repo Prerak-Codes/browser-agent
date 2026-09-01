@@ -32,7 +32,8 @@
       "resources": [
         "assets/yolo-page.js",
         "model/yolov8n.onnx",
-        "ort/*"
+        "ort/*",
+        "ocr/*"
       ],
       "matches": ["<all_urls>"]
     }

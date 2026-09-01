@@ -163,9 +163,10 @@ export default function App() {
                 width: r.width * scaleX,
                 height: r.height * scaleY,
                 type: r.type,
+                text: r.text || "",
               };
             }
-            return { x: r.x, y: r.y, width: r.width, height: r.height, type: r.type };
+            return { x: r.x, y: r.y, width: r.width, height: r.height, type: r.type, text: r.text || "" };
           });
 
           console.log("[PG] Sending", overlayRegions.length, "regions to overlay");
@@ -201,7 +202,7 @@ export default function App() {
   };
 
   const handleSanitize = async () => {
-    if (!screenshot || sensitiveRegions.length === 0) {
+    if (!screenshot) {
       setStatus("Nothing to sanitize. Run capture first.");
       return;
     }
@@ -209,7 +210,10 @@ export default function App() {
     setStatus("Sanitizing screenshot...");
 
     try {
-      const sanitized = await redactImage(screenshot, sensitiveRegions, policy);
+      let sanitized = screenshot;
+      if (sensitiveRegions.length > 0) {
+        sanitized = await redactImage(screenshot, sensitiveRegions, policy);
+      }
       setSanitizedScreenshot(sanitized);
       addAudit("Screenshot sanitized");
 
@@ -220,7 +224,7 @@ export default function App() {
         else if (action === "redact") addAudit(`${region.type} redacted`);
       });
 
-      const ctx = buildSanitizedContext(agentTask, sensitiveRegions, undefined);
+      const ctx = buildSanitizedContext(agentTask, sensitiveRegions, sanitized);
       setSanitizedContext(ctx);
       addAudit("Sanitized context created");
 
@@ -357,8 +361,19 @@ export default function App() {
           </div>
 
           {screenshot && (
-            <div className="preview-card">
-              <div className="preview-label">Screen Preview</div>
+            <div
+              className="preview-card"
+              onClick={() => {
+                const imgSrc = sanitizedScreenshot || screenshot;
+                if (imgSrc) {
+                  chrome.tabs.create({ url: imgSrc });
+                }
+              }}
+              style={{ cursor: sanitizedScreenshot ? "pointer" : "default" }}
+            >
+              <div className="preview-label">
+                {sanitizedScreenshot ? "Sanitized Image (click to open full size)" : "Screen Preview"}
+              </div>
               <img
                 src={sanitizedScreenshot || screenshot}
                 alt="Screenshot"
@@ -447,7 +462,7 @@ export default function App() {
             <button
               className="btn-secondary"
               onClick={handleSanitize}
-              disabled={!screenshot || sensitiveRegions.length === 0}
+              disabled={!screenshot}
             >
               Sanitize Screen
             </button>

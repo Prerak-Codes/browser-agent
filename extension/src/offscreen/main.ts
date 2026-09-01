@@ -1,6 +1,7 @@
 import { configureOrtEnv, ort } from "../vision/ortConfig";
 import type { Detection } from "../vision/types";
 import { CLASS_NAMES, CONFIDENCE_THRESHOLD, MODEL_SIZE } from "../vision/types";
+import { createWorker } from "tesseract.js";
 
 configureOrtEnv();
 
@@ -29,6 +30,27 @@ function applyNMS(detections: Detection[], iouThreshold = 0.45): Detection[] {
     }
   }
   return selected;
+}
+
+const PERSON_CLASS_ID = 0;
+
+function cropToFace(det: Detection): Detection {
+  if (det.classId !== PERSON_CLASS_ID) return det;
+
+  const faceW = det.width * 0.4;
+  const faceH = det.height * 0.35;
+  const faceX = det.x + (det.width - faceW) / 2;
+  const faceY = det.y + det.height * 0.08;
+
+  return {
+    x: faceX,
+    y: faceY,
+    width: faceW,
+    height: faceH,
+    confidence: det.confidence,
+    classId: det.classId,
+    className: det.className,
+  };
 }
 
 function processOutput(output: ort.Tensor): Detection[] {
@@ -61,7 +83,8 @@ function processOutput(output: ort.Tensor): Detection[] {
     });
   }
 
-  return applyNMS(detections, 0.45);
+  const nmsResult = applyNMS(detections, 0.45);
+  return nmsResult.map(cropToFace);
 }
 
 async function imageToTensor(imageSrc: string): Promise<ort.Tensor> {
@@ -149,6 +172,67 @@ async function loadAndDetect(imageSrc: string): Promise<Detection[]> {
   return detections;
 }
 
+let tesseractWorker: Awaited<ReturnType<typeof createWorker>> | null = null;
+
+async function getOCRWorker() {
+  if (tesseractWorker) return tesseractWorker;
+
+  const workerPath = chrome.runtime.getURL("ocr/worker.min.js");
+  const corePath = chrome.runtime.getURL("ocr/");
+  const langPath = chrome.runtime.getURL("ocr/");
+
+  console.log("[Offscreen-OCR] workerPath:", workerPath);
+  console.log("[Offscreen-OCR] corePath:", corePath);
+  console.log("[Offscreen-OCR] langPath:", langPath);
+
+  tesseractWorker = await createWorker("eng", 1, {
+    workerPath,
+    corePath,
+    langPath,
+    cacheMethod: "none",
+  });
+
+  console.log("[Offscreen-OCR] Tesseract worker ready");
+  return tesseractWorker;
+}
+
+async function runOCR(imageSrc: string): Promise<
+  Array<{ text: string; confidence: number; x: number; y: number; width: number; height: number }>
+> {
+  const worker = await getOCRWorker();
+
+  console.log("[Offscreen-OCR] Running OCR on image...");
+  const result = await worker.recognize(imageSrc);
+
+  const regions: Array<{ text: string; confidence: number; x: number; y: number; width: number; height: number }> = [];
+
+  const blocks = result.data.blocks || [];
+  for (const block of blocks) {
+    for (const paragraph of block.paragraphs || []) {
+      for (const line of paragraph.lines || []) {
+        const bbox = line.bbox;
+        const text = line.text.trim();
+        if (text.length === 0) continue;
+        regions.push({
+          text,
+          confidence: line.confidence / 100,
+          x: bbox.x0,
+          y: bbox.y0,
+          width: bbox.x1 - bbox.x0,
+          height: bbox.y1 - bbox.y0,
+        });
+      }
+    }
+  }
+
+  console.log("[Offscreen-OCR] Found", regions.length, "text regions");
+  for (const r of regions) {
+    console.log(`[Offscreen-OCR]   "${r.text}" at (${Math.round(r.x)},${Math.round(r.y)}) ${Math.round(r.width)}x${Math.round(r.height)} conf=${(r.confidence * 100).toFixed(0)}%`);
+  }
+
+  return regions;
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.action === "offscreenDetect") {
     loadAndDetect(message.image)
@@ -161,5 +245,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       });
     return true;
   }
+
+  if (message.action === "offscreenOCR") {
+    runOCR(message.image)
+      .then((regions) => {
+        sendResponse({ success: true, regions });
+      })
+      .catch((err) => {
+        console.error("[Offscreen-OCR] OCR failed:", err);
+        sendResponse({ success: false, error: err.message });
+      });
+    return true;
+  }
+
   return false;
 });

@@ -7,6 +7,15 @@ interface PageDetection {
   height: number;
 }
 
+interface OverlayRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  type: string;
+  text?: string;
+}
+
 function isValidRegion(
   r: { x: number; y: number; width: number; height: number },
   viewW: number,
@@ -63,7 +72,7 @@ function extractPageText(): PageDetection[] {
   const viewW = window.innerWidth;
   const viewH = window.innerHeight;
   const selectors =
-    "input, textarea, select, label, h1, h2, h3, h4, h5, h6, p, span, a, button, td, th, li";
+    "input, textarea, select, label, h1, h2, h3, h4, h5, h6, p, span, a, button, td, th, li, div[role], div[class]";
   const elements = document.querySelectorAll(selectors);
 
   for (const el of elements) {
@@ -86,16 +95,20 @@ function extractPageText(): PageDetection[] {
       text = (el.textContent || "").trim();
     }
 
-    if (text.length === 0 || text.length > 200) continue;
+    if (text.length === 0 || text.length > 500) continue;
 
-    const skipTags = ["SCRIPT", "STYLE", "NOSCRIPT", "IFRAME"];
+    const skipTags = ["SCRIPT", "STYLE", "NOSCRIPT", "IFRAME", "SVG", "IMG"];
     if (skipTags.includes(el.tagName)) continue;
 
     const style = getComputedStyle(el);
-    if (style.display === "none" || style.visibility === "hidden") continue;
+    if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") continue;
+
+    const skipRoles = ["navigation", "banner", "contentinfo", "button", "img", "icon", "presentation", "none"];
+    const role = el.getAttribute("role");
+    if (role && skipRoles.includes(role)) continue;
 
     const detection: PageDetection = {
-      text: text.substring(0, 200),
+      text: text.substring(0, 500),
       confidence: 0.9,
       x: rect.left,
       y: rect.top,
@@ -108,10 +121,125 @@ function extractPageText(): PageDetection[] {
     results.push(detection);
   }
 
-  console.log("[Content] Raw text regions:", results.length);
-  const deduped = deduplicateOCR(results);
-  console.log("[Content] After deduplication:", deduped.length);
-  return deduped;
+  return deduplicateOCR(results);
+}
+
+let overlayEl: HTMLDivElement | null = null;
+let rafId: number | null = null;
+let baseScrollX = 0;
+let baseScrollY = 0;
+let boxOriginals: Array<{
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}> = [];
+let scrollContainer: Element | null = null;
+let containerBaseScrollTop = 0;
+
+function findScrollContainer(): Element | null {
+  let best: Element | null = null;
+  let bestScrollHeight = 0;
+  const all = document.querySelectorAll("*");
+  for (const el of all) {
+    if (el === overlayEl || el === document.documentElement) continue;
+    const style = getComputedStyle(el);
+    if (style.overflowY === "auto" || style.overflowY === "scroll") {
+      if (el.scrollHeight > el.clientHeight + 10 && el.scrollHeight > bestScrollHeight) {
+        best = el;
+        bestScrollHeight = el.scrollHeight;
+      }
+    }
+  }
+  return best;
+}
+
+function onScroll() {
+  if (!overlayEl || boxOriginals.length === 0) return;
+
+  const deltaX = window.scrollX - baseScrollX;
+  const deltaY = window.scrollY - baseScrollY;
+
+  let containerDeltaY = 0;
+  if (scrollContainer) {
+    containerDeltaY = scrollContainer.scrollTop - containerBaseScrollTop;
+  }
+
+  const totalDeltaY = deltaY + containerDeltaY;
+
+  const boxes = overlayEl.querySelectorAll<HTMLElement>("[data-pg-idx]");
+  for (const box of boxes) {
+    const idx = parseInt(box.dataset.pgIdx || "0", 10);
+    const orig = boxOriginals[idx];
+    if (!orig) continue;
+    box.style.left = (orig.left - deltaX) + "px";
+    box.style.top = (orig.top - totalDeltaY) + "px";
+  }
+}
+
+function throttledScroll() {
+  if (rafId !== null) return;
+  rafId = requestAnimationFrame(() => {
+    rafId = null;
+    onScroll();
+  });
+}
+
+function renderBlurOverlay(regions: OverlayRegion[]) {
+  if (overlayEl) {
+    overlayEl.remove();
+    overlayEl = null;
+  }
+  window.removeEventListener("scroll", throttledScroll, true);
+  window.removeEventListener("resize", throttledScroll);
+  if (scrollContainer) {
+    scrollContainer.removeEventListener("scroll", throttledScroll);
+  }
+
+  baseScrollX = window.scrollX;
+  baseScrollY = window.scrollY;
+
+  scrollContainer = findScrollContainer();
+  containerBaseScrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
+
+  const dpr = window.devicePixelRatio || 1;
+
+  overlayEl = document.createElement("div");
+  overlayEl.id = "privacyguard-overlay";
+  overlayEl.style.cssText =
+    "position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;";
+
+  boxOriginals = [];
+
+  for (let i = 0; i < regions.length; i++) {
+    const region = regions[i];
+    if (region.width <= 0 || region.height <= 0) continue;
+
+    const cssX = region.x / dpr;
+    const cssY = region.y / dpr;
+    const cssW = region.width / dpr;
+    const cssH = region.height / dpr;
+
+    boxOriginals.push({ left: cssX, top: cssY, width: cssW, height: cssH });
+
+    const box = document.createElement("div");
+    box.dataset.pgIdx = String(boxOriginals.length - 1);
+    box.style.cssText =
+      `position:absolute;left:${cssX}px;top:${cssY}px;width:${cssW}px;height:${cssH}px;` +
+      "backdrop-filter:blur(8px);background:rgba(0,0,0,0.15);border-radius:2px;";
+    overlayEl.appendChild(box);
+  }
+
+  document.documentElement.appendChild(overlayEl);
+
+  window.addEventListener("scroll", throttledScroll, { capture: true, passive: true });
+  window.addEventListener("resize", throttledScroll, { passive: true });
+  if (scrollContainer) {
+    scrollContainer.addEventListener("scroll", throttledScroll, { passive: true });
+  }
+
+  console.log("[Content] Blur overlay rendered:", boxOriginals.length, "regions",
+    scrollContainer ? "(scroll container detected)" : "(window scroll)");
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -144,50 +272,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.action === "removeOverlay") {
-    const el = document.getElementById("privacyguard-overlay");
-    if (el) el.remove();
+    if (overlayEl) {
+      overlayEl.remove();
+      overlayEl = null;
+    }
+    window.removeEventListener("scroll", throttledScroll, true);
+    window.removeEventListener("resize", throttledScroll);
+    if (scrollContainer) {
+      scrollContainer.removeEventListener("scroll", throttledScroll);
+    }
+    scrollContainer = null;
+    boxOriginals = [];
     sendResponse({ success: true });
     return true;
   }
 
   return false;
 });
-
-function renderBlurOverlay(regions: Array<{
-  x: number; y: number; width: number; height: number; type: string;
-}>) {
-  let overlay = document.getElementById("privacyguard-overlay");
-  if (overlay) overlay.remove();
-
-  const dpr = window.devicePixelRatio || 1;
-
-  overlay = document.createElement("div");
-  overlay.id = "privacyguard-overlay";
-  overlay.style.cssText = `
-    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-    pointer-events: none; z-index: 2147483647;
-  `;
-
-  for (const region of regions) {
-    if (region.width <= 0 || region.height <= 0) continue;
-
-    const cssX = region.x / dpr;
-    const cssY = region.y / dpr;
-    const cssW = region.width / dpr;
-    const cssH = region.height / dpr;
-
-    const box = document.createElement("div");
-    box.style.cssText = `
-      position: absolute;
-      left: ${cssX}px; top: ${cssY}px;
-      width: ${cssW}px; height: ${cssH}px;
-      backdrop-filter: blur(8px);
-      background: rgba(0,0,0,0.15);
-      border-radius: 2px;
-    `;
-    overlay.appendChild(box);
-  }
-
-  document.documentElement.appendChild(overlay);
-  console.log("[Content] Rendered blur overlay with", regions.length, "regions");
-}

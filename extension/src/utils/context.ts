@@ -64,6 +64,17 @@ export function buildSanitizedContext(
   const ocrTexts = collectOCRTexts(sensitiveRegions);
   const detectedElements = inferElements(ocrTexts);
 
+  if (sensitiveRegions.length > 0 && detectedElements.length === 0) {
+    for (const region of sensitiveRegions) {
+      if (region.type === "face") detectedElements.push("face_detected");
+      if (region.type === "email") detectedElements.push("email_field");
+      if (region.type === "phone") detectedElements.push("phone_field");
+      if (region.type === "password") detectedElements.push("password_field");
+      if (region.type === "credit_card") detectedElements.push("credit_card_field");
+      if (region.type === "aadhaar") detectedElements.push("aadhaar_field");
+    }
+  }
+
   return {
     task,
     sanitizedImage,

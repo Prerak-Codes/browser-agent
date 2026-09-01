@@ -36,6 +36,18 @@ function detectWithOffscreen(image: string): Promise<{ success: boolean; detecti
   });
 }
 
+function ocrWithOffscreen(image: string): Promise<{ success: boolean; regions?: unknown[]; error?: string }> {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ action: "offscreenOCR", image }, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve(response);
+    });
+  });
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "capture") {
     chrome.tabs.captureVisibleTab(
@@ -87,6 +99,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       try {
         await ensureOffscreenDocument();
         const response = await detectWithOffscreen(message.image);
+        sendResponse(response);
+      } catch (err) {
+        sendResponse({
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (message.action === "offscreenOCR") {
+    (async () => {
+      try {
+        await ensureOffscreenDocument();
+        const response = await ocrWithOffscreen(message.image);
         sendResponse(response);
       } catch (err) {
         sendResponse({
