@@ -9,8 +9,9 @@ def analyze_task(request: AgentRequest) -> AgentResponse:
     print("=" * 50)
     print("Agent request received")
     print(f"Task: {request.task}")
-    print(f"Detected elements: {len(request.detected_elements)}")
+    print(f"Detected elements: {request.detected_elements}")
     print(f"Sanitized context received: {request.screen_context is not None}")
+    print(f"Sanitized image received: {request.sanitized_image is not None}")
 
     screen_context = request.screen_context or ""
 

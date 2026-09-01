@@ -182,7 +182,9 @@ def _mock_response(
         "fields": {},
         "requires_confirmation": False,
         "explanation": (
-            "Could not determine an appropriate action "
-            "from the available screen context."
+            f"Task: {task}. "
+            f"Detected elements: {', '.join(detected_elements) if detected_elements else 'none'}. "
+            f"No actionable form elements or buttons were identified on screen. "
+            f"The privacy system has sanitized all sensitive data before analysis."
         )
     }
