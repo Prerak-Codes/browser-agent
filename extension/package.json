@@ -17,9 +17,9 @@
     "@types/chrome": "^0.0.300",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
-    "@vitejs/plugin-react": "^4.4.1",
+    "@vitejs/plugin-react": "^4.7.0",
     "esbuild": "^0.28.2",
     "typescript": "~6.0.2",
-    "vite": "^8.2.2"
+    "vite": "^7.3.6"
   }
 }
