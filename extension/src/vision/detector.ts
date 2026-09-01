@@ -8,10 +8,12 @@ export async function detect(imageSrc: string): Promise<Detection[]> {
       { action: "detectYolo", image: imageSrc },
       (response) => {
         if (chrome.runtime.lastError) {
+          console.error("[PG] Chrome runtime error:", chrome.runtime.lastError.message);
           reject(new Error(chrome.runtime.lastError.message));
           return;
         }
         if (!response?.success) {
+          console.error("[PG] YOLO failed:", response?.error);
           reject(new Error(response?.error || "YOLO detection failed"));
           return;
         }

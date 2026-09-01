@@ -61,6 +61,8 @@ export async function redactImage(
     image.src = imageSrc;
 
     image.onload = () => {
+      console.log("[PG-Sanitize] Screenshot dimensions:", image.width, "x", image.height);
+
       const canvas = document.createElement("canvas");
       canvas.width = image.width;
       canvas.height = image.height;
@@ -76,19 +78,28 @@ export async function redactImage(
       const scaleX = image.width / 640;
       const scaleY = image.height / 640;
 
+      console.log("[PG-Sanitize] Applying", sensitiveRegions.length, "regions");
+      console.log("[PG-Sanitize] Scale factors: scaleX=" + scaleX.toFixed(3) + " scaleY=" + scaleY.toFixed(3));
+
       for (const region of sensitiveRegions) {
-        const scaled =
-          region.source === "vision"
-            ? {
-                ...region,
-                x: region.x * scaleX,
-                y: region.y * scaleY,
-                width: region.width * scaleX,
-                height: region.height * scaleY,
-              }
-            : region;
+        let scaled: SensitiveRegion;
+        if (region.source === "vision") {
+          scaled = {
+            ...region,
+            x: region.x * scaleX,
+            y: region.y * scaleY,
+            width: region.width * scaleX,
+            height: region.height * scaleY,
+          };
+        } else {
+          scaled = region;
+        }
 
         const action = policy[scaled.type];
+        console.log(
+          `[PG-Sanitize]   ${scaled.type} at (${Math.round(scaled.x)}, ${Math.round(scaled.y)}) ` +
+          `${Math.round(scaled.width)}x${Math.round(scaled.height)} action=${action} source=${scaled.source}`
+        );
         applyRedaction(ctx, scaled, action);
       }
 

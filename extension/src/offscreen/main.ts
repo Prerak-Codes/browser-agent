@@ -4,7 +4,7 @@ import { CLASS_NAMES, CONFIDENCE_THRESHOLD, MODEL_SIZE } from "../vision/types";
 
 configureOrtEnv();
 
-let session: ort.InferenceSession | null = null;
+let sessionPromise: Promise<ort.InferenceSession> | null = null;
 
 function calculateIoU(a: Detection, b: Detection): number {
   const x1 = Math.max(a.x, b.x);
@@ -90,23 +90,63 @@ async function imageToTensor(imageSrc: string): Promise<ort.Tensor> {
   return new ort.Tensor("float32", input, [1, 3, MODEL_SIZE, MODEL_SIZE]);
 }
 
-async function loadAndDetect(imageSrc: string): Promise<Detection[]> {
-  if (!session) {
-    const modelUrl = chrome.runtime.getURL("model/yolov8n.onnx");
-    console.log("[Offscreen] Loading YOLO model from", modelUrl);
-    session = await ort.InferenceSession.create(modelUrl, {
-      executionProviders: ["wasm"],
-    });
-    console.log("[Offscreen] Model loaded! Inputs:", session.inputNames);
-  }
+async function getSession(): Promise<ort.InferenceSession> {
+  if (sessionPromise) return sessionPromise;
 
+  sessionPromise = (async () => {
+    const modelUrl = chrome.runtime.getURL("model/yolov8n.onnx");
+    console.log("[Offscreen] Loading YOLO model from:", modelUrl);
+
+    try {
+      const response = await fetch(modelUrl);
+      console.log("[Offscreen] Model fetch status:", response.status);
+      console.log("[Offscreen] Content-Type:", response.headers.get("content-type"));
+      const buffer = await response.arrayBuffer();
+      console.log("[Offscreen] Model size:", buffer.byteLength, "bytes");
+
+      if (buffer.byteLength < 1000) {
+        throw new Error("Model file too small - likely not a valid ONNX file");
+      }
+
+      const firstBytes = new Uint8Array(buffer.slice(0, 4));
+      const hex = Array.from(firstBytes).map(b => b.toString(16).padStart(2, "0")).join(" ");
+      console.log("[Offscreen] First 4 bytes:", hex);
+
+      if (hex.startsWith("50 4b")) {
+        throw new Error("Model file is a ZIP/PyTorch checkpoint, not an ONNX protobuf. Need a real .onnx file.");
+      }
+
+      const session = await ort.InferenceSession.create(buffer, {
+        executionProviders: ["wasm"],
+      });
+      console.log("[Offscreen] Session created! Inputs:", session.inputNames, "Outputs:", session.outputNames);
+      return session;
+    } catch (err) {
+      sessionPromise = null;
+      console.error("[Offscreen] Failed to create session:", err);
+      throw err;
+    }
+  })();
+
+  return sessionPromise;
+}
+
+async function loadAndDetect(imageSrc: string): Promise<Detection[]> {
+  const session = await getSession();
+
+  console.log("[Offscreen] Running inference...");
   const input = await imageToTensor(imageSrc);
   const inputName = session.inputNames[0];
   const results = await session.run({ [inputName]: input });
   const output = results[session.outputNames[0]];
   if (!output) throw new Error("Model output not found");
 
-  return processOutput(output as ort.Tensor);
+  const detections = processOutput(output as ort.Tensor);
+  console.log("[Offscreen] YOLO detections:", detections.length);
+  for (const d of detections) {
+    console.log(`[Offscreen]   ${d.className}: ${(d.confidence * 100).toFixed(1)}% at (${Math.round(d.x)},${Math.round(d.y)}) ${Math.round(d.width)}x${Math.round(d.height)}`);
+  }
+  return detections;
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

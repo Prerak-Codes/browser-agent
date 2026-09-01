@@ -138,10 +138,47 @@ export default function App() {
         ocrResults,
         yoloResults
       );
-      console.log("[PG] Sensitive regions:", regions.length, regions);
+      console.log("[PG] Final sensitive regions:", regions.length);
       setSensitiveRegions(regions);
       updateStats(regions);
       addAudit(`${regions.length} sensitive regions detected`);
+
+      if (regions.length > 0) {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (tab?.id) {
+          const img = new Image();
+          img.src = response.image;
+          await new Promise<void>((res) => { img.onload = () => res(); });
+          const screenshotW = img.width;
+          const screenshotH = img.height;
+          console.log("[PG] Screenshot dimensions:", screenshotW, "x", screenshotH);
+
+          const overlayRegions = regions.map((r) => {
+            if (r.source === "vision") {
+              const scaleX = screenshotW / 640;
+              const scaleY = screenshotH / 640;
+              return {
+                x: r.x * scaleX,
+                y: r.y * scaleY,
+                width: r.width * scaleX,
+                height: r.height * scaleY,
+                type: r.type,
+              };
+            }
+            return { x: r.x, y: r.y, width: r.width, height: r.height, type: r.type };
+          });
+
+          console.log("[PG] Sending", overlayRegions.length, "regions to overlay");
+          for (const r of overlayRegions) {
+            console.log(`[PG]   overlay: ${r.type} at (${Math.round(r.x)},${Math.round(r.y)}) ${Math.round(r.width)}x${Math.round(r.height)}`);
+          }
+
+          chrome.tabs.sendMessage(tab.id, {
+            action: "renderOverlay",
+            regions: overlayRegions,
+          });
+        }
+      }
 
       const counts = {
         email: regions.filter((r) => r.type === "email").length,
