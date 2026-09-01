@@ -40,6 +40,7 @@ def analyze_task(request: AgentRequest) -> AgentResponse:
 
     return AgentResponse(
         action=plan["action"],
+        target=plan.get("target", ""),
         fields=plan["fields"],
         requires_confirmation=plan["requires_confirmation"],
         explanation=plan["explanation"]

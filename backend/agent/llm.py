@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import httpx
 
 
@@ -26,11 +27,7 @@ def ask_llm(
 
     print(f"[LLM] Calling {model} at {base_url}")
 
-    prompt = _build_prompt(
-        task,
-        screen_context,
-        detected_elements
-    )
+    prompt = _build_prompt(task, screen_context, detected_elements)
 
     try:
         headers = {
@@ -44,10 +41,15 @@ def ask_llm(
                 {
                     "role": "system",
                     "content": (
-                        "You are a privacy-preserving AI agent. "
-                        "You receive ONLY sanitized screen context. "
-                        "You never receive raw screenshots or sensitive data. "
-                        "Return a JSON object with: action, fields, requires_confirmation, explanation."
+                        "You are a browser automation assistant. "
+                        "You analyze sanitized screenshots and text extracted from web pages. "
+                        "You suggest concrete, actionable steps the user can take. "
+                        "Always return valid JSON with these keys: "
+                        "action (string: click, fill_form, navigate, scroll, type_text, select_option, none), "
+                        "target (string: exact button/element text or CSS selector hint), "
+                        "fields (object: field names to values for fill_form, empty object otherwise), "
+                        "requires_confirmation (boolean), "
+                        "explanation (string: 1-3 sentences explaining what you see and what to do)."
                     )
                 },
                 {
@@ -55,8 +57,8 @@ def ask_llm(
                     "content": prompt
                 }
             ],
-            "temperature": 0.3,
-            "max_tokens": 500
+            "temperature": 0.2,
+            "max_tokens": 400
         }
 
         response = httpx.post(
@@ -88,10 +90,10 @@ def ask_llm(
         if not content:
             raise LLMError("Empty LLM response")
 
-        return json.loads(content)
+        return _parse_llm_response(content)
 
     except json.JSONDecodeError:
-        print("[LLM] Invalid JSON response from LLM")
+        print(f"[LLM] Raw response: {content[:500]}")
         raise LLMError("Invalid JSON response from LLM")
     except httpx.TimeoutException:
         print("[LLM] Request timed out")
@@ -103,30 +105,51 @@ def ask_llm(
         raise LLMError(f"LLM request failed: {str(e)}")
 
 
+def _parse_llm_response(content: str) -> dict:
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        pass
+
+    json_match = re.search(r'\{[\s\S]*\}', content)
+    if json_match:
+        try:
+            return json.loads(json_match.group())
+        except json.JSONDecodeError:
+            pass
+
+    return {
+        "action": "none",
+        "target": "",
+        "fields": {},
+        "requires_confirmation": False,
+        "explanation": content.strip()[:500]
+    }
+
+
 def _build_prompt(
     task: str,
     screen_context: str,
     detected_elements: list[str]
 ) -> str:
 
-    elements_str = ", ".join(detected_elements) if detected_elements else "none detected"
+    elements_str = "\n".join(f"  - {e}" for e in detected_elements) if detected_elements else "  (none)"
 
     return (
-        f"You are a privacy-preserving AI agent that helps users interact with web pages.\n\n"
-        f"USER TASK: {task}\n\n"
-        f"WHAT IS VISIBLE ON SCREEN (from OCR/DOM text extraction):\n{screen_context}\n\n"
-        f"DETECTED SENSITIVE ELEMENTS: {elements_str}\n\n"
-        f"INSTRUCTIONS:\n"
-        f"- Analyze the visible text on the screen carefully.\n"
-        f"- Identify buttons, links, forms, input fields, and other interactive elements.\n"
-        f"- Suggest the most appropriate action to accomplish the user's task.\n"
-        f"- If there is a button that matches the task (e.g. 'Apply', 'Quick Apply', 'Submit'), suggest clicking it.\n"
-        f"- If there are form fields, suggest filling them with SAFE_PLACEHOLDER values.\n"
-        f"- Be specific about which element to interact with based on the actual text visible on screen.\n\n"
-        f"Return JSON: {{\"action\": \"fill_form|click|navigate|none\", "
-        f"\"fields\": {{\"field_name\": \"SAFE_PLACEHOLDER\"}}, "
-        f"\"requires_confirmation\": true, "
-        f"\"explanation\": \"specific explanation of what was found on screen and what action to take\"}}"
+        f"TASK: {task}\n\n"
+        f"VISIBLE PAGE TEXT:\n{screen_context}\n\n"
+        f"DETECTED UI ELEMENTS:\n{elements_str}\n\n"
+        f"Based on the visible text and elements above:\n"
+        f"1. Identify the most relevant interactive element for the task.\n"
+        f"2. Suggest a specific action (click a button, fill a field, navigate to a link, etc.).\n"
+        f"3. If form filling is needed, suggest SAFE placeholder values (e.g. 'USER_NAME', 'USER_EMAIL').\n"
+        f"4. If no matching element exists, suggest navigation steps.\n\n"
+        f"Return JSON:\n"
+        f'{{"action": "click|fill_form|navigate|scroll|type_text|none", '
+        f'"target": "exact text of the element to interact with", '
+        f'"fields": {{"field_name": "SAFE_PLACEHOLDER"}}, '
+        f'"requires_confirmation": true, '
+        f'"explanation": "what you found and what to do"}}'
     )
 
 
@@ -165,6 +188,7 @@ def _mock_response(
 
         return {
             "action": "fill_form",
+            "target": "",
             "fields": fields if fields else {"input": "USER_INPUT"},
             "requires_confirmation": True,
             "explanation": (
@@ -177,7 +201,8 @@ def _mock_response(
     if has_login:
         return {
             "action": "click",
-            "fields": {"target": "login_button"},
+            "target": "login_button",
+            "fields": {},
             "requires_confirmation": True,
             "explanation": (
                 "A login button was detected. "
@@ -187,6 +212,7 @@ def _mock_response(
 
     return {
         "action": "none",
+        "target": "",
         "fields": {},
         "requires_confirmation": False,
         "explanation": (

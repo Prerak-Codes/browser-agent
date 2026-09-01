@@ -2,6 +2,7 @@ import type { SanitizedContext } from "../utils/context";
 
 export interface AgentResponse {
   action: string;
+  target: string;
   fields: Record<string, string>;
   requires_confirmation: boolean;
   explanation: string;

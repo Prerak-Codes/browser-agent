@@ -2,6 +2,9 @@ SAFE_ACTIONS = {
     "fill_form",
     "click",
     "navigate",
+    "scroll",
+    "type_text",
+    "select_option",
     "none"
 }
 
@@ -14,6 +17,7 @@ def create_action_plan(llm_result: dict) -> dict:
         print(f"[Planner] Rejected unsafe action: {action}")
         return {
             "action": "none",
+            "target": "",
             "fields": {},
             "requires_confirmation": False,
             "explanation": (
@@ -27,6 +31,10 @@ def create_action_plan(llm_result: dict) -> dict:
     if not isinstance(fields, dict):
         fields = {}
 
+    target = llm_result.get("target", "")
+    if not isinstance(target, str):
+        target = ""
+
     requires_confirmation = action != "none"
 
     explanation = llm_result.get(
@@ -36,6 +44,7 @@ def create_action_plan(llm_result: dict) -> dict:
 
     return {
         "action": action,
+        "target": target,
         "fields": fields,
         "requires_confirmation": requires_confirmation,
         "explanation": explanation

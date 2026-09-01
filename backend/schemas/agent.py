@@ -11,6 +11,7 @@ class AgentRequest(BaseModel):
 
 class AgentResponse(BaseModel):
     action: str
+    target: str = ""
     fields: Dict[str, str]
     requires_confirmation: bool
     explanation: str

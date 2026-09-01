@@ -2,14 +2,20 @@ import { useState, useEffect, useCallback } from "react";
 import type { Detection } from "../vision/types";
 import type { OCRDetection } from "../ocr/ocr";
 import type { SensitiveRegion } from "../privacy/piiDetector";
-import type { PrivacyPolicy, PrivacyAction } from "../privacy/policies";
+import type { PrivacyPolicy, PrivacyAction, CustomPattern, LifetimeStats } from "../privacy/policies";
 import type { AgentResponse } from "../agent/api";
 import type { SanitizedContext } from "../utils/context";
 import { detect } from "../vision/detector";
 import { initializeOCR, detectText } from "../ocr/ocr";
 import { detectSensitiveRegions } from "../privacy/piiDetector";
 import { redactImage } from "../privacy/sanitizer";
-import { getPrivacyPolicy, savePrivacyPolicy } from "../privacy/policies";
+import {
+  getPrivacyPolicy, savePrivacyPolicy,
+  getCustomPatterns, addCustomPattern, removeCustomPattern,
+  getLifetimeStats, updateLifetimeStats,
+  saveSessionState, loadSessionState, clearSessionState,
+  BUILT_IN_TYPES,
+} from "../privacy/policies";
 import { buildSanitizedContext } from "../utils/context";
 import { analyzeWithAgent } from "../agent/api";
 
@@ -20,16 +26,14 @@ interface AuditEntry {
   message: string;
 }
 
-interface Stats {
-  faces: number;
-  emails: number;
-  phones: number;
-  creditCards: number;
-  passwords: number;
-  aadhaar: number;
-  rawSent: number;
-  sanitizedSent: number;
-}
+const LABELS: Record<string, string> = {
+  face: "Face",
+  email: "Email",
+  phone: "Phone",
+  credit_card: "Credit Card",
+  password: "Password",
+  aadhaar: "Aadhaar",
+};
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("dashboard");
@@ -40,21 +44,21 @@ export default function App() {
   const [visionDetections, setVisionDetections] = useState<Detection[]>([]);
   const [ocrDetections, setOcrDetections] = useState<OCRDetection[]>([]);
   const [sensitiveRegions, setSensitiveRegions] = useState<SensitiveRegion[]>([]);
-  const [stats, setStats] = useState<Stats>({
-    faces: 0, emails: 0, phones: 0, creditCards: 0, passwords: 0, aadhaar: 0,
-    rawSent: 0, sanitizedSent: 0,
-  });
-  const [policy, setPolicy] = useState<PrivacyPolicy>({
-    face: "blur", email: "mask", phone: "mask",
-    credit_card: "redact", password: "redact", aadhaar: "mask",
-  });
+  const [policy, setPolicy] = useState<PrivacyPolicy>({});
+  const [customPatterns, setCustomPatterns] = useState<CustomPattern[]>([]);
+  const [newPatternName, setNewPatternName] = useState("");
+  const [newPatternRegex, setNewPatternRegex] = useState("");
+  const [patternError, setPatternError] = useState("");
   const [aiEnabled, setAiEnabled] = useState(true);
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
-  const [agentTask, setAgentTask] = useState("Help me fill this form");
+  const [agentTask, setAgentTask] = useState("Help me apply to this");
   const [agentResponse, setAgentResponse] = useState<AgentResponse | null>(null);
   const [agentLoading, setAgentLoading] = useState(false);
   const [agentError, setAgentError] = useState<string | null>(null);
   const [sanitizedContext, setSanitizedContext] = useState<SanitizedContext | null>(null);
+  const [lifetimeStats, setLifetimeStats] = useState<LifetimeStats>({
+    totalCaptures: 0, totalSanitizations: 0, totalSentToLLM: 0, totalSensitiveRegions: 0,
+  });
 
   const addAudit = useCallback((message: string) => {
     const now = new Date();
@@ -64,23 +68,44 @@ export default function App() {
 
   useEffect(() => {
     getPrivacyPolicy().then((p) => setPolicy(p));
+    getCustomPatterns().then((p) => setCustomPatterns(p));
+    getLifetimeStats().then((s) => setLifetimeStats(s));
     chrome.runtime.sendMessage({ action: "getTabInfo" }, (response) => {
-      if (response?.success) {
-        setHostname(response.hostname);
+      if (response?.success) setHostname(response.hostname);
+    });
+
+    loadSessionState().then((state) => {
+      if (state) {
+        if (state.screenshot) setScreenshot(state.screenshot);
+        if (state.sanitizedScreenshot) setSanitizedScreenshot(state.sanitizedScreenshot);
+        if (state.sensitiveRegionsJson) setSensitiveRegions(JSON.parse(state.sensitiveRegionsJson));
+        if (state.ocrDetectionsJson) setOcrDetections(JSON.parse(state.ocrDetectionsJson));
+        if (state.visionDetectionsJson) setVisionDetections(JSON.parse(state.visionDetectionsJson));
+        addAudit("Session restored");
       }
     });
   }, []);
 
-  const updateStats = (regions: SensitiveRegion[]) => {
-    setStats((prev) => ({
-      ...prev,
-      faces: regions.filter((r) => r.type === "face").length,
-      emails: regions.filter((r) => r.type === "email").length,
-      phones: regions.filter((r) => r.type === "phone").length,
-      creditCards: regions.filter((r) => r.type === "credit_card").length,
-      passwords: regions.filter((r) => r.type === "password").length,
-      aadhaar: regions.filter((r) => r.type === "aadhaar").length,
-    }));
+  const persistSession = useCallback(async () => {
+    await saveSessionState({});
+  }, []);
+
+  useEffect(() => {
+    if (screenshot || sanitizedScreenshot || sensitiveRegions.length > 0) {
+      saveSessionState({
+        screenshot,
+        sanitizedScreenshot,
+        sensitiveRegionsJson: JSON.stringify(sensitiveRegions),
+        ocrDetectionsJson: JSON.stringify(ocrDetections),
+        visionDetectionsJson: JSON.stringify(visionDetections),
+      });
+    }
+  }, [screenshot, sanitizedScreenshot, sensitiveRegions, ocrDetections, visionDetections]);
+
+  const updateLifetime = async (updates: Partial<LifetimeStats>) => {
+    await updateLifetimeStats(updates);
+    const s = await getLifetimeStats();
+    setLifetimeStats(s);
   };
 
   const handleCapture = async () => {
@@ -102,13 +127,12 @@ export default function App() {
 
       setScreenshot(response.image);
       addAudit("Screen captured");
+      await updateLifetime({ totalCaptures: 1 });
       setStatus("Running YOLO detection...");
 
       let yoloResults: Detection[] = [];
       try {
-        console.log("[PG] Starting YOLO detection...");
         yoloResults = await detect(response.image);
-        console.log("[PG] YOLO results:", yoloResults.length, yoloResults);
         setVisionDetections(yoloResults);
         addAudit(`YOLO detected ${yoloResults.length} objects`);
       } catch (err) {
@@ -123,7 +147,6 @@ export default function App() {
       try {
         await initializeOCR((msg) => setStatus(msg));
         ocrResults = await detectText(response.image, (msg) => setStatus(msg));
-        console.log("[PG] OCR results:", ocrResults.length, ocrResults);
         setOcrDetections(ocrResults);
         addAudit(`OCR detected ${ocrResults.length} text regions`);
       } catch (err) {
@@ -133,69 +156,54 @@ export default function App() {
 
       setStatus("Analyzing privacy...");
 
-      console.log("[PG] Running detectSensitiveRegions with", ocrResults.length, "OCR and", yoloResults.length, "vision results");
-      const regions = detectSensitiveRegions(
-        ocrResults,
-        yoloResults
-      );
-      console.log("[PG] Final sensitive regions:", regions.length);
+      const regions = detectSensitiveRegions(ocrResults, yoloResults, customPatterns);
       setSensitiveRegions(regions);
-      updateStats(regions);
+      await updateLifetime({ totalSensitiveRegions: regions.length });
       addAudit(`${regions.length} sensitive regions detected`);
 
       if (regions.length > 0) {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (tab?.id) {
+        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (activeTab?.id) {
           const img = new Image();
           img.src = response.image;
           await new Promise<void>((res) => { img.onload = () => res(); });
           const screenshotW = img.width;
           const screenshotH = img.height;
-          console.log("[PG] Screenshot dimensions:", screenshotW, "x", screenshotH);
 
           const overlayRegions = regions.map((r) => {
             if (r.source === "vision") {
               const scaleX = screenshotW / 640;
               const scaleY = screenshotH / 640;
               return {
-                x: r.x * scaleX,
-                y: r.y * scaleY,
-                width: r.width * scaleX,
-                height: r.height * scaleY,
-                type: r.type,
-                text: r.text || "",
+                x: r.x * scaleX, y: r.y * scaleY,
+                width: r.width * scaleX, height: r.height * scaleY,
+                type: r.type, text: r.text || "",
               };
             }
             return { x: r.x, y: r.y, width: r.width, height: r.height, type: r.type, text: r.text || "" };
           });
 
-          console.log("[PG] Sending", overlayRegions.length, "regions to overlay");
-          for (const r of overlayRegions) {
-            console.log(`[PG]   overlay: ${r.type} at (${Math.round(r.x)},${Math.round(r.y)}) ${Math.round(r.width)}x${Math.round(r.height)}`);
-          }
-
-          chrome.tabs.sendMessage(tab.id, {
+          chrome.tabs.sendMessage(activeTab.id, {
             action: "renderOverlay",
             regions: overlayRegions,
           });
         }
       }
 
-      const counts = {
-        email: regions.filter((r) => r.type === "email").length,
-        phone: regions.filter((r) => r.type === "phone").length,
-        password: regions.filter((r) => r.type === "password").length,
-        credit_card: regions.filter((r) => r.type === "credit_card").length,
-        aadhaar: regions.filter((r) => r.type === "aadhaar").length,
-        face: regions.filter((r) => r.type === "face").length,
-      };
+      const typeCounts: Record<string, number> = {};
+      for (const r of regions) {
+        typeCounts[r.type] = (typeCounts[r.type] || 0) + 1;
+      }
+      for (const [type, count] of Object.entries(typeCounts)) {
+        addAudit(`${count} ${type} region(s) detected`);
+      }
 
-      if (counts.email > 0) addAudit(`${counts.email} email(s) detected`);
-      if (counts.phone > 0) addAudit(`${counts.phone} phone number(s) detected`);
-      if (counts.password > 0) addAudit(`${counts.password} password field(s) detected`);
-      if (counts.credit_card > 0) addAudit(`${counts.credit_card} credit card(s) detected`);
-      if (counts.aadhaar > 0) addAudit(`${counts.aadhaar} Aadhaar number(s) detected`);
-      if (counts.face > 0) addAudit(`${counts.face} face(s) detected`);
+      if (regions.length === 0) {
+        const allOcrTexts = ocrResults.map((r) => r.text).filter((t) => t && t.length > 0);
+        const ctx = buildSanitizedContext(agentTask, [], response.image, allOcrTexts);
+        setSanitizedContext(ctx);
+        addAudit("No sensitive data — AI analysis ready");
+      }
 
       setStatus("Analysis complete.");
     });
@@ -216,18 +224,14 @@ export default function App() {
       }
       setSanitizedScreenshot(sanitized);
       addAudit("Screenshot sanitized");
+      await updateLifetime({ totalSanitizations: 1 });
 
       sensitiveRegions.forEach((region) => {
-        const action = policy[region.type];
-        if (action === "blur") addAudit(`${region.type} blurred`);
-        else if (action === "mask") addAudit(`${region.type} masked`);
-        else if (action === "redact") addAudit(`${region.type} redacted`);
+        const action = policy[region.type] || "mask";
+        addAudit(`${region.type} ${action}ed`);
       });
 
-      const allOcrTexts = ocrDetections
-        .map((r) => r.text)
-        .filter((t) => t && t.length > 0);
-
+      const allOcrTexts = ocrDetections.map((r) => r.text).filter((t) => t && t.length > 0);
       const ctx = buildSanitizedContext(agentTask, sensitiveRegions, sanitized, allOcrTexts);
       setSanitizedContext(ctx);
       addAudit("Sanitized context created");
@@ -256,8 +260,7 @@ export default function App() {
     setAgentResponse(null);
     setAgentError(null);
     setStatus("Sending to AI agent...");
-
-    setStats((prev) => ({ ...prev, sanitizedSent: prev.sanitizedSent + 1 }));
+    await updateLifetime({ totalSentToLLM: 1 });
     addAudit("Sanitized context sent to agent");
 
     try {
@@ -285,14 +288,47 @@ export default function App() {
     setAgentResponse(null);
   };
 
-  const handlePolicyChange = (key: keyof PrivacyPolicy, value: PrivacyAction) => {
-    setPolicy((prev) => ({ ...prev, [key]: value }));
+  const handlePolicyChange = async (key: string, value: PrivacyAction) => {
+    const updated = { ...policy, [key]: value };
+    setPolicy(updated);
+    await savePrivacyPolicy(updated);
+    addAudit(`Policy: ${key} → ${value}`);
   };
 
   const handleSavePolicy = async () => {
     await savePrivacyPolicy(policy);
     addAudit("Privacy policy saved");
     setStatus("Policy saved.");
+  };
+
+  const handleAddPattern = async () => {
+    setPatternError("");
+    if (!newPatternName.trim() || !newPatternRegex.trim()) {
+      setPatternError("Name and regex are required.");
+      return;
+    }
+    const ok = await addCustomPattern(newPatternName.trim(), newPatternRegex.trim());
+    if (!ok) {
+      setPatternError("Invalid regex or name already exists.");
+      return;
+    }
+    const patterns = await getCustomPatterns();
+    setCustomPatterns(patterns);
+    const p = await getPrivacyPolicy();
+    setPolicy(p);
+    setNewPatternName("");
+    setNewPatternRegex("");
+    addAudit(`Custom pattern "${newPatternName}" added`);
+    setStatus("Pattern added.");
+  };
+
+  const handleRemovePattern = async (name: string) => {
+    await removeCustomPattern(name);
+    const patterns = await getCustomPatterns();
+    setCustomPatterns(patterns);
+    const p = await getPrivacyPolicy();
+    setPolicy(p);
+    addAudit(`Custom pattern "${name}" removed`);
   };
 
   const toggleAiAccess = () => {
@@ -305,20 +341,18 @@ export default function App() {
 
   const privacyScore =
     sensitiveRegions.length > 0
-      ? Math.max(
-          50,
-          100 - sensitiveRegions.length * 3
-        )
+      ? Math.max(50, 100 - sensitiveRegions.length * 3)
       : 100;
 
-  const counts = {
-    face: sensitiveRegions.filter((r) => r.type === "face").length,
-    email: sensitiveRegions.filter((r) => r.type === "email").length,
-    phone: sensitiveRegions.filter((r) => r.type === "phone").length,
-    credit_card: sensitiveRegions.filter((r) => r.type === "credit_card").length,
-    password: sensitiveRegions.filter((r) => r.type === "password").length,
-    aadhaar: sensitiveRegions.filter((r) => r.type === "aadhaar").length,
-  };
+  const typeCounts: Record<string, number> = {};
+  for (const r of sensitiveRegions) {
+    typeCounts[r.type] = (typeCounts[r.type] || 0) + 1;
+  }
+
+  const allPolicyKeys = [
+    ...BUILT_IN_TYPES,
+    ...customPatterns.map((p) => p.name),
+  ];
 
   return (
     <div className="app">
@@ -334,24 +368,9 @@ export default function App() {
       </header>
 
       <nav className="tabs">
-        <button
-          className={`tab ${tab === "dashboard" ? "active" : ""}`}
-          onClick={() => setTab("dashboard")}
-        >
-          Dashboard
-        </button>
-        <button
-          className={`tab ${tab === "settings" ? "active" : ""}`}
-          onClick={() => setTab("settings")}
-        >
-          Settings
-        </button>
-        <button
-          className={`tab ${tab === "activity" ? "active" : ""}`}
-          onClick={() => setTab("activity")}
-        >
-          Activity
-        </button>
+        <button className={`tab ${tab === "dashboard" ? "active" : ""}`} onClick={() => setTab("dashboard")}>Dashboard</button>
+        <button className={`tab ${tab === "settings" ? "active" : ""}`} onClick={() => setTab("settings")}>Settings</button>
+        <button className={`tab ${tab === "activity" ? "active" : ""}`} onClick={() => setTab("activity")}>Activity</button>
       </nav>
 
       {tab === "dashboard" && (
@@ -369,23 +388,15 @@ export default function App() {
               className="preview-card"
               onClick={() => {
                 const imgSrc = sanitizedScreenshot || screenshot;
-                if (imgSrc) {
-                  chrome.tabs.create({ url: imgSrc });
-                }
+                if (imgSrc) chrome.tabs.create({ url: imgSrc });
               }}
-              style={{ cursor: sanitizedScreenshot ? "pointer" : "default" }}
+              style={{ cursor: "pointer" }}
             >
               <div className="preview-label">
                 {sanitizedScreenshot ? "Sanitized Image (click to open full size)" : "Screen Preview"}
               </div>
-              <img
-                src={sanitizedScreenshot || screenshot}
-                alt="Screenshot"
-                className="preview-image"
-              />
-              {sanitizedScreenshot && (
-                <div className="sanitized-badge">Sanitized</div>
-              )}
+              <img src={sanitizedScreenshot || screenshot} alt="Screenshot" className="preview-image" />
+              {sanitizedScreenshot && <div className="sanitized-badge">Sanitized</div>}
             </div>
           )}
 
@@ -393,46 +404,14 @@ export default function App() {
             <div className="stats-card">
               <div className="stats-title">Sensitive Data</div>
               <div className="stats-grid">
-                {counts.face > 0 && (
-                  <div className="stat-row">
-                    <span>&#128100; Faces</span>
-                    <span className="stat-count">{counts.face}</span>
+                {Object.entries(typeCounts).map(([type, count]) => (
+                  <div className="stat-row" key={type}>
+                    <span>{LABELS[type] || type}</span>
+                    <span className="stat-count">{count}</span>
                   </div>
-                )}
-                {counts.email > 0 && (
-                  <div className="stat-row">
-                    <span>&#9993; Emails</span>
-                    <span className="stat-count">{counts.email}</span>
-                  </div>
-                )}
-                {counts.phone > 0 && (
-                  <div className="stat-row">
-                    <span>&#9742; Phones</span>
-                    <span className="stat-count">{counts.phone}</span>
-                  </div>
-                )}
-                {counts.credit_card > 0 && (
-                  <div className="stat-row">
-                    <span>&#128179; Cards</span>
-                    <span className="stat-count">{counts.credit_card}</span>
-                  </div>
-                )}
-                {counts.password > 0 && (
-                  <div className="stat-row">
-                    <span>&#128274; Passwords</span>
-                    <span className="stat-count">{counts.password}</span>
-                  </div>
-                )}
-                {counts.aadhaar > 0 && (
-                  <div className="stat-row">
-                    <span>&#128196; Aadhaar</span>
-                    <span className="stat-count">{counts.aadhaar}</span>
-                  </div>
-                )}
+                ))}
                 {sensitiveRegions.length === 0 && screenshot && (
-                  <div className="stat-row">
-                    <span>No sensitive data detected</span>
-                  </div>
+                  <div className="stat-row"><span>No sensitive data detected</span></div>
                 )}
               </div>
             </div>
@@ -442,10 +421,7 @@ export default function App() {
             <div className="score-card">
               <div className="score-label">Privacy Score</div>
               <div className="score-bar-container">
-                <div
-                  className="score-bar"
-                  style={{ width: `${privacyScore}%` }}
-                ></div>
+                <div className="score-bar" style={{ width: `${privacyScore}%` }}></div>
               </div>
               <div className="score-value">{privacyScore}%</div>
               <div className="score-checks">
@@ -456,18 +432,10 @@ export default function App() {
           )}
 
           <div className="actions">
-            <button
-              className="btn-primary"
-              onClick={handleCapture}
-              disabled={status.includes("Running") || status.includes("Capturing")}
-            >
+            <button className="btn-primary" onClick={handleCapture} disabled={status.includes("Running") || status.includes("Capturing")}>
               Capture &amp; Analyze
             </button>
-            <button
-              className="btn-secondary"
-              onClick={handleSanitize}
-              disabled={!screenshot}
-            >
+            <button className="btn-secondary" onClick={handleSanitize} disabled={!screenshot}>
               Sanitize Screen
             </button>
           </div>
@@ -477,55 +445,34 @@ export default function App() {
           {screenshot && (
             <div className="agent-section">
               <div className="agent-title">AI Agent</div>
-              <input
-                type="text"
-                className="agent-input"
-                value={agentTask}
-                onChange={(e) => setAgentTask(e.target.value)}
-                placeholder="Describe your task..."
-              />
-              <button
-                className="btn-ai"
-                onClick={handleAnalyzeWithAI}
-                disabled={agentLoading || !sanitizedContext || !aiEnabled}
-              >
+              <input type="text" className="agent-input" value={agentTask} onChange={(e) => setAgentTask(e.target.value)} placeholder="Describe your task..." />
+              <button className="btn-ai" onClick={handleAnalyzeWithAI} disabled={agentLoading || !sanitizedContext || !aiEnabled}>
                 {agentLoading ? "Analyzing..." : "Analyze with AI"}
               </button>
 
-              {agentError && (
-                <div className="agent-error">{agentError}</div>
-              )}
+              {agentError && <div className="agent-error">{agentError}</div>}
 
               {agentResponse && (
                 <div className="agent-result">
                   <div className="agent-result-title">AI Suggested Action</div>
-                  <div className="agent-action">
-                    <strong>Action:</strong> {agentResponse.action}
-                  </div>
+                  <div className="agent-action"><strong>Action:</strong> {agentResponse.action}</div>
+                  {agentResponse.target && (
+                    <div className="agent-action"><strong>Target:</strong> {agentResponse.target}</div>
+                  )}
                   {Object.keys(agentResponse.fields).length > 0 && (
                     <div className="agent-fields">
                       {Object.entries(agentResponse.fields).map(([key, val]) => (
-                        <div key={key} className="agent-field">
-                          {key} &rarr; {val}
-                        </div>
+                        <div key={key} className="agent-field">{key} &rarr; {val}</div>
                       ))}
                     </div>
                   )}
-                  <div className="agent-explanation">
-                    {agentResponse.explanation}
-                  </div>
+                  <div className="agent-explanation">{agentResponse.explanation}</div>
                   {agentResponse.requires_confirmation && (
-                    <div className="agent-warning">
-                      &#9888; Requires confirmation
-                    </div>
+                    <div className="agent-warning">&#9888; Requires confirmation</div>
                   )}
                   <div className="agent-buttons">
-                    <button className="btn-approve" onClick={handleApprove}>
-                      Approve
-                    </button>
-                    <button className="btn-reject" onClick={handleReject}>
-                      Reject
-                    </button>
+                    <button className="btn-approve" onClick={handleApprove}>Approve</button>
+                    <button className="btn-reject" onClick={handleReject}>Reject</button>
                   </div>
                 </div>
               )}
@@ -538,58 +485,60 @@ export default function App() {
         <div className="content">
           <div className="settings-section">
             <div className="settings-title">Privacy Protection</div>
-            {(
-              [
-                ["face", "Face"],
-                ["email", "Email"],
-                ["phone", "Phone"],
-                ["credit_card", "Credit Card"],
-                ["password", "Password"],
-                ["aadhaar", "Aadhaar"],
-              ] as const
-            ).map(([key, label]) => (
+            {allPolicyKeys.map((key) => (
               <div className="policy-row" key={key}>
-                <label>{label}</label>
-                <select
-                  value={policy[key]}
-                  onChange={(e) =>
-                    handlePolicyChange(key, e.target.value as PrivacyAction)
-                  }
-                >
+                <label>{LABELS[key] || key}{customPatterns.some((p) => p.name === key) ? " (custom)" : ""}</label>
+                <select value={policy[key] || "mask"} onChange={(e) => handlePolicyChange(key, e.target.value as PrivacyAction)}>
                   <option value="blur">Blur</option>
                   <option value="mask">Mask</option>
                   <option value="redact">Redact</option>
                   <option value="allow">Allow</option>
                 </select>
+                {customPatterns.some((p) => p.name === key) && (
+                  <button className="btn-remove" onClick={() => handleRemovePattern(key)}>x</button>
+                )}
               </div>
             ))}
-            <button className="btn-save" onClick={handleSavePolicy}>
-              Save Policy
-            </button>
+            <button className="btn-save" onClick={handleSavePolicy}>Save Policy</button>
+          </div>
+
+          <div className="settings-section">
+            <div className="settings-title">Add Custom Pattern</div>
+            <div className="custom-pattern-form">
+              <input type="text" className="pattern-input" value={newPatternName} onChange={(e) => setNewPatternName(e.target.value)} placeholder="Pattern name (e.g. pan_card)" />
+              <input type="text" className="pattern-input" value={newPatternRegex} onChange={(e) => setNewPatternRegex(e.target.value)} placeholder="Regex (e.g. [A-Z]{5}[0-9]{4}[A-Z])" />
+              <button className="btn-save" onClick={handleAddPattern}>Add Pattern</button>
+              {patternError && <div className="agent-error">{patternError}</div>}
+            </div>
           </div>
 
           <div className="settings-section">
             <div className="settings-title">AI Access</div>
             <div className="policy-row">
               <label>Enable AI Backend</label>
-              <button
-                className={`toggle-btn ${aiEnabled ? "" : "off"}`}
-                onClick={toggleAiAccess}
-              >
+              <button className={`toggle-btn ${aiEnabled ? "" : "off"}`} onClick={toggleAiAccess}>
                 {aiEnabled ? "ON" : "OFF"}
               </button>
             </div>
           </div>
 
           <div className="stats-section">
-            <div className="settings-title">Statistics</div>
+            <div className="settings-title">Lifetime Statistics</div>
             <div className="stat-row">
-              <span>Raw Screenshots Sent</span>
-              <span className="stat-count">{stats.rawSent}</span>
+              <span>Total Captures</span>
+              <span className="stat-count">{lifetimeStats.totalCaptures}</span>
             </div>
             <div className="stat-row">
-              <span>Sanitized Screens Sent</span>
-              <span className="stat-count">{stats.sanitizedSent}</span>
+              <span>Total Sanitizations</span>
+              <span className="stat-count">{lifetimeStats.totalSanitizations}</span>
+            </div>
+            <div className="stat-row">
+              <span>Sent to LLM (Lifetime)</span>
+              <span className="stat-count">{lifetimeStats.totalSentToLLM}</span>
+            </div>
+            <div className="stat-row">
+              <span>Sensitive Regions Found</span>
+              <span className="stat-count">{lifetimeStats.totalSensitiveRegions}</span>
             </div>
           </div>
         </div>

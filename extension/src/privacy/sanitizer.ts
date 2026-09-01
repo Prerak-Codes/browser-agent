@@ -95,7 +95,7 @@ export async function redactImage(
           scaled = region;
         }
 
-        const action = policy[scaled.type];
+        const action = policy[scaled.type] || "mask";
         console.log(
           `[PG-Sanitize]   ${scaled.type} at (${Math.round(scaled.x)}, ${Math.round(scaled.y)}) ` +
           `${Math.round(scaled.width)}x${Math.round(scaled.height)} action=${action} source=${scaled.source}`

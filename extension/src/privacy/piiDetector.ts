@@ -1,9 +1,9 @@
 import type { Detection } from "../vision/types";
 import type { OCRDetection } from "../ocr/ocr";
-import type { PrivacyType } from "./policies";
+import type { CustomPattern } from "./policies";
 
 export interface SensitiveRegion {
-  type: PrivacyType;
+  type: string;
   confidence: number;
   x: number;
   y: number;
@@ -249,7 +249,7 @@ function detectFaces(visionDetections: Detection[]): SensitiveRegion[] {
   return visionDetections
     .filter((d) => d.className === "person")
     .map((d) => ({
-      type: "face" as PrivacyType,
+      type: "face",
       confidence: d.confidence * 0.8,
       x: d.x,
       y: d.y,
@@ -258,6 +258,53 @@ function detectFaces(visionDetections: Detection[]): SensitiveRegion[] {
       source: "vision" as const,
       text: undefined,
     }));
+}
+
+function detectCustomPatterns(
+  ocrDetections: OCRDetection[],
+  patterns: CustomPattern[]
+): SensitiveRegion[] {
+  const results: SensitiveRegion[] = [];
+  const seen = new Set<string>();
+
+  for (const pattern of patterns) {
+    let regex: RegExp;
+    try {
+      regex = new RegExp(pattern.regex, "gi");
+    } catch {
+      continue;
+    }
+
+    for (const detection of ocrDetections) {
+      const matches = detection.text.match(regex);
+      if (!matches) continue;
+
+      for (const match of matches) {
+        const key = `${pattern.name}:${match.toLowerCase()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        const bounds = estimateSubstringBounds(
+          detection.text,
+          match,
+          detection.x,
+          detection.y,
+          detection.width,
+          detection.height
+        );
+
+        results.push({
+          type: pattern.name,
+          confidence: 0.85,
+          ...bounds,
+          source: "ocr",
+          text: match.length > 4 ? maskValue(match) : match,
+        });
+      }
+    }
+  }
+
+  return results;
 }
 
 function deduplicateRegions(regions: SensitiveRegion[]): SensitiveRegion[] {
@@ -289,9 +336,10 @@ function computeIoU(
 
 export function detectSensitiveRegions(
   ocrDetections: OCRDetection[],
-  visionDetections: Detection[]
+  visionDetections: Detection[],
+  customPatterns: CustomPattern[] = []
 ): SensitiveRegion[] {
-  console.log("[PG] detectSensitiveRegions called with", ocrDetections.length, "OCR and", visionDetections.length, "vision");
+  console.log("[PG] detectSensitiveRegions called with", ocrDetections.length, "OCR and", visionDetections.length, "vision and", customPatterns.length, "custom patterns");
 
   const emailRegions = detectEmails(ocrDetections);
   const phoneRegions = detectPhones(ocrDetections);
@@ -299,6 +347,7 @@ export function detectSensitiveRegions(
   const aadhaarRegions = detectAadhaar(ocrDetections);
   const creditCardRegions = detectCreditCards(ocrDetections);
   const faceRegions = detectFaces(visionDetections);
+  const customRegions = detectCustomPatterns(ocrDetections, customPatterns);
 
   console.log("[PG] Email regions:", emailRegions.length);
   console.log("[PG] Phone regions:", phoneRegions.length);
@@ -306,6 +355,7 @@ export function detectSensitiveRegions(
   console.log("[PG] Aadhaar regions:", aadhaarRegions.length);
   console.log("[PG] Credit card regions:", creditCardRegions.length);
   console.log("[PG] Face regions:", faceRegions.length);
+  console.log("[PG] Custom pattern regions:", customRegions.length);
 
   const all = [
     ...emailRegions,
@@ -314,6 +364,7 @@ export function detectSensitiveRegions(
     ...aadhaarRegions,
     ...creditCardRegions,
     ...faceRegions,
+    ...customRegions,
   ];
 
   const deduped = deduplicateRegions(all);
