@@ -61,7 +61,7 @@ export async function redactImage(
     image.src = imageSrc;
 
     image.onload = () => {
-      console.log("[PG-Sanitize] Screenshot dimensions:", image.width, "x", image.height);
+      console.log("[PG-Sanitize] Canvas dimensions:", image.width, "x", image.height);
 
       const canvas = document.createElement("canvas");
       canvas.width = image.width;
@@ -75,21 +75,20 @@ export async function redactImage(
 
       ctx.drawImage(image, 0, 0);
 
-      const scaleX = image.width / 640;
-      const scaleY = image.height / 640;
+      const visionScaleX = image.width / 640;
+      const visionScaleY = image.height / 640;
 
       console.log("[PG-Sanitize] Applying", sensitiveRegions.length, "regions");
-      console.log("[PG-Sanitize] Scale factors: scaleX=" + scaleX.toFixed(3) + " scaleY=" + scaleY.toFixed(3));
 
       for (const region of sensitiveRegions) {
         let scaled: SensitiveRegion;
         if (region.source === "vision") {
           scaled = {
             ...region,
-            x: region.x * scaleX,
-            y: region.y * scaleY,
-            width: region.width * scaleX,
-            height: region.height * scaleY,
+            x: region.x * visionScaleX,
+            y: region.y * visionScaleY,
+            width: region.width * visionScaleX,
+            height: region.height * visionScaleY,
           };
         } else {
           scaled = region;

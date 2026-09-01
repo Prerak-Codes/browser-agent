@@ -11,6 +11,61 @@ class LLMError(Exception):
         super().__init__(message)
 
 
+def call_llm_raw(api_key: str, base_url: str, model: str, messages: list[dict]) -> str:
+    """Public API: call the LLM with a pre-built messages list.
+
+    Unlike _call_llm(), this accepts a fully-constructed messages list so
+    callers can include vision content blocks, multi-turn history, etc.
+    Returns the raw content string from the model.
+    """
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": 1500,
+    }
+
+    response = httpx.post(
+        f"{base_url}/chat/completions",
+        headers=headers,
+        json=payload,
+        timeout=45.0,
+    )
+
+    if response.status_code == 401:
+        raise LLMError("Invalid API key", 401)
+    if response.status_code == 404:
+        raise LLMError(f"Model not found: {model}", 404)
+    if response.status_code == 429:
+        raise LLMError("Rate limit exceeded", 429)
+    if response.status_code >= 500:
+        raise LLMError(f"Provider error: {response.status_code}", response.status_code)
+
+    response.raise_for_status()
+
+    data = response.json()
+    choice = data.get("choices", [{}])[0]
+    message = choice.get("message", {})
+    content = message.get("content", "")
+
+    # Some models surface content under alternate keys
+    if not content:
+        for key in ("reasoning_content", "reasoning", "text", "output", "response"):
+            val = message.get(key, "")
+            if val and isinstance(val, str):
+                content = val
+                break
+
+    if not content:
+        print(f"[LLM] Empty content from {model}. Choice: {json.dumps(choice)[:300]}")
+
+    return content or ""
+
+
 def ask_llm(
     task: str,
     screen_context: str,
@@ -30,71 +85,19 @@ def ask_llm(
     prompt = _build_prompt(task, screen_context, detected_elements)
 
     try:
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
+        content = _call_llm(api_key, base_url, model, prompt)
 
-        payload = {
-            "model": model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a browser automation assistant. "
-                        "You analyze sanitized screenshots and text extracted from web pages. "
-                        "You suggest concrete, actionable steps the user can take. "
-                        "Always return valid JSON with these keys: "
-                        "action (string: click, fill_form, navigate, scroll, type_text, select_option, none), "
-                        "target (string: exact button/element text or CSS selector hint), "
-                        "fields (object: field names to values for fill_form, empty object otherwise), "
-                        "requires_confirmation (boolean), "
-                        "explanation (string: 1-3 sentences explaining what you see and what to do)."
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            "temperature": 0.2,
-            "max_tokens": 400
-        }
-
-        response = httpx.post(
-            f"{base_url}/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=30.0
-        )
-
-        if response.status_code == 401:
-            raise LLMError("Invalid API key", 401)
-        if response.status_code == 404:
-            raise LLMError("Model not found", 404)
-        if response.status_code == 429:
-            raise LLMError("Rate limit exceeded", 429)
-        if response.status_code >= 500:
-            raise LLMError("Provider error", response.status_code)
-
-        response.raise_for_status()
-
-        data = response.json()
-
-        content = (
-            data.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
-        )
+        if not content:
+            fallback = os.getenv("LLM_FALLBACK_MODEL", "")
+            if fallback and fallback != model:
+                print(f"[LLM] Retrying with fallback: {fallback}")
+                content = _call_llm(api_key, base_url, fallback, prompt)
 
         if not content:
             raise LLMError("Empty LLM response")
 
         return _parse_llm_response(content)
 
-    except json.JSONDecodeError:
-        print(f"[LLM] Raw response: {content[:500]}")
-        raise LLMError("Invalid JSON response from LLM")
     except httpx.TimeoutException:
         print("[LLM] Request timed out")
         raise LLMError("LLM request timed out")
@@ -103,6 +106,85 @@ def ask_llm(
     except Exception as e:
         print(f"[LLM] Error: {e}")
         raise LLMError(f"LLM request failed: {str(e)}")
+
+
+def _call_llm(api_key: str, base_url: str, model: str, prompt: str) -> str:
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a browser automation assistant. "
+                    "You analyze sanitized screenshots and text extracted from web pages. "
+                    "You suggest concrete, actionable steps the user can take. "
+                    "Always return valid JSON with these keys: "
+                    "action (string: click, fill_form, navigate, scroll, type_text, select_option, none), "
+                    "target (string: exact button/element text or CSS selector hint), "
+                    "fields (object: field names to values for fill_form, empty object otherwise), "
+                    "requires_confirmation (boolean), "
+                    "explanation (string: 1-3 sentences explaining what you see and what to do)."
+                )
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "temperature": 0.2,
+        "max_tokens": 400
+    }
+
+    response = httpx.post(
+        f"{base_url}/chat/completions",
+        headers=headers,
+        json=payload,
+        timeout=30.0
+    )
+
+    if response.status_code == 401:
+        raise LLMError("Invalid API key", 401)
+    if response.status_code == 404:
+        raise LLMError(f"Model not found: {model}", 404)
+    if response.status_code == 429:
+        raise LLMError("Rate limit exceeded", 429)
+    if response.status_code >= 500:
+        raise LLMError(f"Provider error: {response.status_code}", response.status_code)
+
+    response.raise_for_status()
+
+    data = response.json()
+
+    print(f"[LLM] Response keys: {list(data.keys())}")
+
+    choice = data.get("choices", [{}])[0]
+    message = choice.get("message", {})
+    content = message.get("content", "")
+
+    if not content:
+        content = message.get("reasoning_content", "")
+
+    if not content:
+        reasoning = message.get("reasoning", "")
+        if isinstance(reasoning, str) and reasoning:
+            content = reasoning
+
+    if not content and isinstance(message, dict):
+        for key in ["text", "output", "response"]:
+            if message.get(key):
+                content = message[key]
+                break
+
+    if not content:
+        print(f"[LLM] Empty content. Full choice: {json.dumps(choice)[:500]}")
+        print(f"[LLM] Full message: {json.dumps(message)[:500]}")
+
+    return content or ""
 
 
 def _parse_llm_response(content: str) -> dict:
@@ -136,20 +218,21 @@ def _build_prompt(
     elements_str = "\n".join(f"  - {e}" for e in detected_elements) if detected_elements else "  (none)"
 
     return (
-        f"TASK: {task}\n\n"
-        f"VISIBLE PAGE TEXT:\n{screen_context}\n\n"
-        f"DETECTED UI ELEMENTS:\n{elements_str}\n\n"
-        f"Based on the visible text and elements above:\n"
-        f"1. Identify the most relevant interactive element for the task.\n"
-        f"2. Suggest a specific action (click a button, fill a field, navigate to a link, etc.).\n"
-        f"3. If form filling is needed, suggest SAFE placeholder values (e.g. 'USER_NAME', 'USER_EMAIL').\n"
-        f"4. If no matching element exists, suggest navigation steps.\n\n"
+        f"USER REQUEST: {task}\n\n"
+        f"PAGE CONTEXT:\n{screen_context}\n\n"
+        f"IDENTIFIED ELEMENTS:\n{elements_str}\n\n"
+        f"Based on the page text and identified elements above:\n"
+        f"1. Determine what the user wants to accomplish.\n"
+        f"2. Find the most relevant interactive element (button, link, form field) that matches the request.\n"
+        f"3. Suggest a specific action with the exact element text or description.\n"
+        f"4. If form filling is needed, use SAFE placeholder values.\n"
+        f"5. If no matching element exists on this page, suggest navigation steps.\n\n"
         f"Return JSON:\n"
         f'{{"action": "click|fill_form|navigate|scroll|type_text|none", '
-        f'"target": "exact text of the element to interact with", '
+        f'"target": "exact text or description of the element to interact with", '
         f'"fields": {{"field_name": "SAFE_PLACEHOLDER"}}, '
         f'"requires_confirmation": true, '
-        f'"explanation": "what you found and what to do"}}'
+        f'"explanation": "concise explanation of what you see and what to do"}}'
     )
 
 

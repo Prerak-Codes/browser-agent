@@ -6,6 +6,15 @@ export interface SanitizedContext {
   sanitizedImage?: string;
   detectedElements: string[];
   ocrTexts: string[];
+  ocrDetections?: Array<{
+    text: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    confidence: number;
+  }>;
+  hostname?: string;
   privacySummary: {
     totalSensitiveRegions: number;
     types: string[];
@@ -51,7 +60,9 @@ export function buildSanitizedContext(
   task: string,
   sensitiveRegions: SensitiveRegion[],
   sanitizedImage?: string,
-  allOcrTexts?: string[]
+  allOcrTexts?: string[],
+  hostname?: string,
+  ocrDetections?: Array<{ text: string; x: number; y: number; width: number; height: number; confidence: number }>
 ): SanitizedContext {
   const types: string[] = [];
   const typeSet = new Set<PrivacyType>();
@@ -82,9 +93,12 @@ export function buildSanitizedContext(
     sanitizedImage,
     detectedElements,
     ocrTexts,
+    ocrDetections,
+    hostname,
     privacySummary: {
       totalSensitiveRegions: sensitiveRegions.length,
       types,
     },
   };
 }
+

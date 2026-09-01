@@ -6,8 +6,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
-from schemas.agent import AgentRequest, AgentResponse
+from schemas.agent import AgentRequest, AgentResponse, PlanRequest, PlanResponse
 from agent.controller import analyze_task
+from agent.plan_controller import build_plan
 
 load_dotenv()
 
@@ -115,3 +116,16 @@ def run_ocr(request: OCRRequest):
 @app.post("/agent/analyze", response_model=AgentResponse)
 def agent_analyze(request: AgentRequest):
     return analyze_task(request)
+
+
+@app.post("/api/agent/plan", response_model=PlanResponse)
+def agent_plan(request: PlanRequest):
+    """AI agent planning endpoint.
+
+    Accepts a natural language instruction alongside screen context
+    (screenshot, DOM, OCR regions, sensitive region metadata) and returns
+    a structured, multi-step action plan for the browser extension to execute.
+
+    The backend never directly controls the browser — it only produces the plan.
+    """
+    return build_plan(request)

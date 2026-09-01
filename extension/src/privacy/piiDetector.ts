@@ -17,7 +17,7 @@ const EMAIL_REGEX =
   /\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b/gi;
 
 const PHONE_REGEX =
-  /(?:\+91[\s\-]?)?(?!\d{5}[\s\-]?\d{5}\b)(?:\d{5}[\s\-]?\d{5}|\d{10})\b/g;
+  /(?:\+91[\s\-]?)?(?:\d{5}[\s\-]\d{5}|\d{10})/g;
 
 const AADHAAR_REGEX = /\b\d{4}[\s]?\d{4}[\s]?\d{4}\b/g;
 
@@ -109,7 +109,7 @@ function detectPhones(ocrDetections: OCRDetection[]): SensitiveRegion[] {
       const digits = match.replace(/\D/g, "");
       if (digits.length < 10 || digits.length > 13) continue;
 
-      if (digits.length === 12 && /^\d{4}\s?\d{4}\s?\d{4}$/.test(match)) continue;
+      if (digits.length >= 12) continue;
 
       const key = digits;
       if (seen.has(key)) continue;

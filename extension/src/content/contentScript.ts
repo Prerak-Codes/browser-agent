@@ -72,7 +72,7 @@ function extractPageText(): PageDetection[] {
   const viewW = window.innerWidth;
   const viewH = window.innerHeight;
   const selectors =
-    "input, textarea, select, label, h1, h2, h3, h4, h5, h6, p, span, a, button, td, th, li, div[role], div[class]";
+    "input, textarea, select, label, h1, h2, h3, h4, h5, h6, p, span, a, button, td, th, li, div[role], div[class], code, pre, strong, em, b, i, small, mark, abbr, time, data, output";
   const elements = document.querySelectorAll(selectors);
 
   for (const el of elements) {
@@ -82,15 +82,15 @@ function extractPageText(): PageDetection[] {
     let text = "";
     const input = el as HTMLInputElement;
 
-    if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
-      text =
-        input.placeholder ||
-        input.getAttribute("aria-label") ||
-        input.name ||
-        input.type ||
-        "";
+    if (el.tagName === "INPUT") {
+      const type = (input.type || "").toLowerCase();
+      if (type === "hidden" || type === "password" || type === "file" || type === "image") continue;
+      text = input.value || input.placeholder || input.getAttribute("aria-label") || input.name || "";
+    } else if (el.tagName === "TEXTAREA") {
+      text = input.value || input.placeholder || "";
     } else if (el.tagName === "SELECT") {
-      text = el.getAttribute("aria-label") || el.id || "select";
+      const sel = el as HTMLSelectElement;
+      text = sel.options[sel.selectedIndex]?.text || el.getAttribute("aria-label") || el.id || "";
     } else {
       text = (el.textContent || "").trim();
     }
@@ -103,7 +103,7 @@ function extractPageText(): PageDetection[] {
     const style = getComputedStyle(el);
     if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") continue;
 
-    const skipRoles = ["navigation", "banner", "contentinfo", "button", "img", "icon", "presentation", "none"];
+    const skipRoles = ["navigation", "banner", "contentinfo", "img", "icon", "presentation", "none"];
     const role = el.getAttribute("role");
     if (role && skipRoles.includes(role)) continue;
 

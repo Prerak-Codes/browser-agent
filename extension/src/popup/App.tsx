@@ -198,9 +198,24 @@ export default function App() {
         addAudit(`${count} ${type} region(s) detected`);
       }
 
-      if (regions.length === 0) {
+      if (regions.length > 0) {
+        setStatus("Auto-sanitizing sensitive data...");
+        try {
+          const sanitized = await redactImage(response.image, regions, policy);
+          setSanitizedScreenshot(sanitized);
+          addAudit("Auto-sanitized sensitive regions");
+
+          const allOcrTexts = ocrResults.map((r) => r.text).filter((t) => t && t.length > 0);
+          const ctx = buildSanitizedContext(agentTask, regions, sanitized, allOcrTexts, hostname, ocrResults);
+          setSanitizedContext(ctx);
+          addAudit("Context ready for AI analysis");
+        } catch (err) {
+          console.error("[PG] Auto-sanitize failed:", err);
+          addAudit("Auto-sanitize failed");
+        }
+      } else {
         const allOcrTexts = ocrResults.map((r) => r.text).filter((t) => t && t.length > 0);
-        const ctx = buildSanitizedContext(agentTask, [], response.image, allOcrTexts);
+        const ctx = buildSanitizedContext(agentTask, [], response.image, allOcrTexts, hostname, ocrResults);
         setSanitizedContext(ctx);
         addAudit("No sensitive data — AI analysis ready");
       }
@@ -232,8 +247,9 @@ export default function App() {
       });
 
       const allOcrTexts = ocrDetections.map((r) => r.text).filter((t) => t && t.length > 0);
-      const ctx = buildSanitizedContext(agentTask, sensitiveRegions, sanitized, allOcrTexts);
+      const ctx = buildSanitizedContext(agentTask, sensitiveRegions, sanitized, allOcrTexts, hostname, ocrDetections);
       setSanitizedContext(ctx);
+
       addAudit("Sanitized context created");
 
       setStatus("Sanitization complete.");
